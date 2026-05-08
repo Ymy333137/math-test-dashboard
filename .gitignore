@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Pixi
+.pixi/
+
+# Local secrets
+.env
+.env.*
+!.env.example
+
+# OCR batches generated locally
+ocr_output/
+
+# Guard against accidentally placing the records clone inside the app repo
+math-records/
+
+# Personal math records must live in a separate private/local records repo
+math_records.json
+review_state.json
+*-record.json
+*error_abc.md
+unit_*_coverage.md
+unit_*_outline.md
+workbook_*_progress.md
+analyzer.md
+dashboard.md
+第一单元-极限.md
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+*~

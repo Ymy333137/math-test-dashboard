@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>数学错题工作台</title>
+  <link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">M</div>
+        <div>
+          <h1>数学错题工作台</h1>
+          <p>本地记录 · OCR · 掌握度</p>
+        </div>
+      </div>
+
+      <nav class="nav">
+        <button class="nav-item active" data-target="overview">总览</button>
+        <button class="nav-item" data-target="review">回滚复习</button>
+        <button class="nav-item" data-target="errors">错题记录</button>
+        <button class="nav-item" data-target="ocr">OCR 批次</button>
+      </nav>
+
+      <div class="book-panel">
+        <label for="bookSelect">题册</label>
+        <select id="bookSelect"></select>
+        <div class="book-meta" id="bookMeta">正在读取记录</div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Local Dashboard</p>
+          <h2 id="pageTitle">总览</h2>
+        </div>
+        <div class="status-pill" id="dataStatus">加载中</div>
+      </header>
+
+      <section class="view active" id="overviewView">
+        <div class="metrics-grid">
+          <article class="metric">
+            <span>总记录</span>
+            <strong id="totalRecords">-</strong>
+          </article>
+          <article class="metric">
+            <span>题册记录</span>
+            <strong id="bookRecords">-</strong>
+          </article>
+          <article class="metric">
+            <span>ABC 错题</span>
+            <strong id="errorTotal">-</strong>
+          </article>
+          <article class="metric">
+            <span>平均掌握度</span>
+            <strong id="avgMastery">-</strong>
+          </article>
+        </div>
+
+        <div class="overview-grid">
+          <section class="panel">
+            <div class="panel-head">
+              <h3>ABC 分布</h3>
+              <span>以 MD 索引为准</span>
+            </div>
+            <div class="abc-chart" id="abcChart"></div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <h3>最近掌握度</h3>
+              <span>最近 12 条记录</span>
+            </div>
+            <div class="trend-chart" id="trendChart"></div>
+          </section>
+        </div>
+
+        <div class="overview-grid bottom">
+          <section class="panel">
+            <div class="panel-head">
+              <h3>高频错因</h3>
+              <span>error_tags</span>
+            </div>
+            <div id="errorTags" class="rank-list"></div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <h3>薄弱点</h3>
+              <span>weakness_focus</span>
+            </div>
+            <div id="weaknessFocus" class="rank-list"></div>
+          </section>
+        </div>
+
+        <section class="panel">
+          <div class="panel-head">
+            <h3>单元覆盖</h3>
+            <span>覆盖文档摘要</span>
+          </div>
+          <div class="coverage-list" id="coverageList"></div>
+        </section>
+      </section>
+
+      <section class="view" id="reviewView">
+        <div class="review-grid">
+          <section class="panel control-panel">
+            <div class="panel-head">
+              <h3>今日回滚</h3>
+              <span>机械间隔 · 660</span>
+            </div>
+
+            <div class="review-controls">
+              <label>
+                每日上限
+                <input id="dailyLimit" type="number" min="1" max="200" value="10">
+              </label>
+              <fieldset class="tier-fieldset">
+                <legend>目标分层</legend>
+                <label><input type="checkbox" name="tier" value="90" checked> 90</label>
+                <label><input type="checkbox" name="tier" value="110" checked> 110</label>
+                <label><input type="checkbox" name="tier" value="135" checked> 135</label>
+              </fieldset>
+              <button class="primary-action compact" id="refreshReview" type="button">刷新队列</button>
+            </div>
+
+            <div class="review-metrics">
+              <article class="mini-metric">
+                <span>应复盘</span>
+                <strong id="reviewDue">-</strong>
+              </article>
+              <article class="mini-metric">
+                <span>今日队列</span>
+                <strong id="reviewSelected">-</strong>
+              </article>
+              <article class="mini-metric">
+                <span>超出上限</span>
+                <strong id="reviewOverflow">-</strong>
+              </article>
+            </div>
+
+            <div class="tier-ledger" id="reviewTierCounts"></div>
+          </section>
+
+          <section class="panel activity-panel">
+            <div class="panel-head">
+              <h3>复盘活跃</h3>
+              <span id="activityMeta">近 16 周</span>
+            </div>
+            <div class="activity-heatmap" id="reviewActivity"></div>
+            <div class="rule-strip" aria-label="排序规则">
+              <span>新近优先</span>
+              <span>失败多优先</span>
+              <span>逾期优先</span>
+              <span>90 > 110 > 135</span>
+              <span>A > B > C</span>
+            </div>
+          </section>
+        </div>
+
+        <div class="review-columns">
+          <section class="panel">
+            <div class="panel-head">
+              <h3>今日队列</h3>
+              <span id="reviewTodayMeta">等待读取</span>
+            </div>
+            <div id="reviewQueue" class="review-list"></div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <h3>顺延队列</h3>
+              <span>超过上限时显示</span>
+            </div>
+            <div id="reviewDeferred" class="review-list compact-list"></div>
+          </section>
+        </div>
+
+        <section class="panel review-history-panel">
+          <div class="panel-head">
+            <h3>复盘记录</h3>
+            <span>点错后可在这里修改</span>
+          </div>
+          <div id="reviewHistory" class="history-list"></div>
+        </section>
+      </section>
+
+      <section class="view" id="errorsView">
+        <section class="panel">
+          <div class="panel-head">
+            <h3>错题记录</h3>
+            <span>按单元与 ABC 分级查看</span>
+          </div>
+          <div class="level-tabs" id="levelTabs">
+            <button class="tab active" data-level="all">全部</button>
+            <button class="tab" data-level="A">A 级</button>
+            <button class="tab" data-level="B">B 级</button>
+            <button class="tab" data-level="C">C 级</button>
+          </div>
+          <div id="errorList" class="error-list"></div>
+        </section>
+      </section>
+
+      <section class="view" id="ocrView">
+        <div class="ocr-grid">
+          <section class="panel">
+            <div class="panel-head">
+              <h3>OCR 新批次</h3>
+              <span>粘贴或上传图片</span>
+            </div>
+            <form id="ocrForm" class="ocr-form">
+              <label>
+                题号范围
+                <input id="questionRange" name="questionRange" placeholder="例如 800-133-145" required>
+              </label>
+              <label>
+                批次备注
+                <textarea id="batchNote" name="batchNote" placeholder="例如 第二单元导数基础题；可留空"></textarea>
+              </label>
+              <div class="upload-box" id="uploadBox" tabindex="0">
+                <input id="imageInput" type="file" accept="image/*" multiple>
+                <strong>点击选择图片，或直接粘贴截图</strong>
+                <span>支持多张图片，按当前预览顺序发送</span>
+              </div>
+              <div class="preview-grid" id="previewGrid"></div>
+              <button class="primary-action" id="ocrSubmit" type="submit">生成题目 Markdown</button>
+            </form>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <h3>识别结果</h3>
+              <span id="ocrState">等待提交</span>
+            </div>
+            <pre class="ocr-output" id="ocrOutput">识别结果会显示在这里。</pre>
+            <div class="file-note" id="ocrFile"></div>
+          </section>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="/static/js/app.js"></script>
+</body>
+</html>
