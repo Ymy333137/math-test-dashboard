@@ -6,7 +6,7 @@ platforms = ["osx-arm64"]
 version = "0.1.0"
 
 [tasks]
-dev = "uvicorn app:app --reload --host 127.0.0.1 --port 8000"
+dev = "python -m uvicorn app:app --reload --host 127.0.0.1 --port 8000"
 
 [dependencies]
 fastapi = ">=0.136.1,<0.137"
