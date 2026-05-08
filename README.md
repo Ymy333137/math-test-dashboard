@@ -19,7 +19,7 @@
 ```text
 math-test_2/
   app/                   # 本仓库，只放 app 代码
-  records/               # 你的本地/私有错题记录仓库，不提交到本仓库
+  records/               # 你的本地/私有错题记录仓库，不提交到仓库
 ```
 
 app 默认从 `../records` 读取记录文件。也可以在 `.env` 中修改：
@@ -206,19 +206,6 @@ ABC 错题索引，用于错题页按单元和等级展示。app 会读取二级
     }
   }
 }
-```
-
-## 安全说明
-
-- 真实 API key 只放在 `.env` 或系统环境变量中。
-- 个人错题记录只放在 `MATH_RECORDS_DIR` 指向的目录中。
-- OCR 输出默认写入本地 `ocr_output/`，该目录不会提交。
-- 如果曾经把 key 发到聊天或公开位置，建议到对应平台轮换 key。
-
-## 开发验证
-
-```bash
-pixi run python -m py_compile app.py
 ```
 
 也可以用浏览器访问 `/api/dashboard`、`/api/review/today` 验证数据读取是否正常。
