@@ -401,9 +401,9 @@ function renderHistoryCard(event) {
     <article class="history-card ${levelClass}" data-qid="${escapeHtml(event.question_id)}" data-index="${event.event_index}">
       <div class="history-main">
         <strong>${escapeHtml(event.question_id)}</strong>
-        ${tierTag}
         <span>${event.outcome === "pass" ? "对了" : `仍错 ${escapeHtml(event.error_level || "B")}`}</span>
         <span>下次 ${escapeHtml(event.next_due_at || "-")}</span>
+        ${tierTag}
       </div>
       <div class="history-edit">
         <select class="history-outcome">
