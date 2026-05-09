@@ -337,20 +337,23 @@ function renderActivity(days) {
     container.innerHTML = '<div class="empty compact-empty">暂无复盘活跃记录</div>';
     return;
   }
+  const dailyTarget = Math.max(1, Number(state.review?.settings?.daily_limit || 10));
   const cells = days.map((day) => {
-    const level = activityHeatLevel(day.count);
-    return `<span class="heat-cell heat-${level}" title="${day.date} · ${day.count} 次"></span>`;
+    const ratio = Math.min(day.count / dailyTarget, 1);
+    const level = activityHeatLevel(ratio, day.count);
+    const percent = Math.round(ratio * 100);
+    return `<span class="heat-cell heat-${level}" title="${day.date} · ${day.count}/${dailyTarget} 题 · ${percent}%"></span>`;
   }).join("");
   const total = days.reduce((sum, day) => sum + day.count, 0);
-  $("#activityMeta").textContent = `近 ${days.length} 天 · ${total} 次`;
+  $("#activityMeta").textContent = `近 ${days.length} 天 · ${total} 次 · 目标 ${dailyTarget} 题/天`;
   container.innerHTML = cells;
 }
 
-function activityHeatLevel(count) {
+function activityHeatLevel(ratio, count) {
   if (count <= 0) return 0;
-  if (count === 1) return 1;
-  if (count <= 3) return 2;
-  if (count <= 6) return 3;
+  if (ratio < 0.25) return 1;
+  if (ratio < 0.5) return 2;
+  if (ratio < 0.8) return 3;
   return 4;
 }
 
