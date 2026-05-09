@@ -474,7 +474,7 @@ def build_review_payload(
 def next_interval_for(level: str, current_index: int, intervals: dict[str, list[int]], passed: bool) -> tuple[int, int]:
     schedule = intervals.get(level) or DEFAULT_REVIEW_SETTINGS["intervals"].get(level, [1])
     if passed:
-        next_index = min(current_index + 1, len(schedule) - 1)
+        next_index = 1 if current_index < 0 and len(schedule) > 1 else min(current_index + 1, len(schedule) - 1)
     else:
         next_index = 0
     return next_index, schedule[next_index]
