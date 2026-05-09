@@ -371,7 +371,9 @@ function renderReviewHistory() {
   }
   container.innerHTML = groupHistoryByDate(history).map((group) => `
     <section class="history-day">
-      <div class="history-day-label"><span>${escapeHtml(group.label)}</span></div>
+      <div class="history-day-label">
+        <span>${escapeHtml(group.label)} · ${group.items.length} 题</span>
+      </div>
       <div class="history-day-items">
         ${group.items.map(renderHistoryCard).join("")}
       </div>
