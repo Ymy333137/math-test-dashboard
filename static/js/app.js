@@ -282,7 +282,7 @@ function renderReview() {
     input.checked = review.settings.selected_tiers.includes(Number(input.value));
   });
   $("#reviewDue").textContent = review.summary.due_total;
-  $("#reviewSelected").textContent = review.summary.selected_total;
+  $("#reviewSelected").textContent = review.summary.pending_total ?? review.summary.selected_total;
   $("#reviewOverflow").textContent = review.summary.overflow_total;
   $("#reviewTodayMeta").textContent = `${review.today} · ${review.label}`;
   $("#reviewTierCounts").innerHTML = ["90", "110", "135"].map((tier) => `

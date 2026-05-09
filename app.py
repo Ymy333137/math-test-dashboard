@@ -423,6 +423,13 @@ def review_sort_key(item: dict[str, Any]) -> tuple:
     )
 
 
+def reviewed_on(item: dict[str, Any], target_date: date) -> bool:
+    for event in item.get("state_history", []):
+        if event_review_date(event) == target_date:
+            return True
+    return False
+
+
 def build_review_payload(
     book_id: str = "workbook_660",
     selected_tiers: list[int] | None = None,
@@ -439,16 +446,25 @@ def build_review_payload(
     for record in book_record.get("history", []):
         item = review_item_from_record(record, state, today)
         if item and item.get("target_score_tier") in selected_tiers:
+            item["state_history"] = state.get("items", {}).get(item["question_id"], {}).get("history", [])
             candidates.append(item)
 
     due_items = [item for item in candidates if item["is_due"]]
+    planned_items_by_id = {item["question_id"]: item for item in due_items}
+    for item in candidates:
+        if reviewed_on(item, today):
+            planned_items_by_id[item["question_id"]] = item
+    planned_items = list(planned_items_by_id.values())
+
     due_items.sort(key=review_sort_key)
     selected = due_items[:daily_limit]
     deferred = due_items[daily_limit:]
     tier_counts = {
-        str(tier): sum(1 for item in due_items if item.get("target_score_tier") == tier)
+        str(tier): sum(1 for item in planned_items if item.get("target_score_tier") == tier)
         for tier in [90, 110, 135]
     }
+    for item in candidates:
+        item.pop("state_history", None)
 
     return {
         "book_id": book_id,
@@ -461,7 +477,8 @@ def build_review_payload(
             "intervals": settings.get("intervals", DEFAULT_REVIEW_SETTINGS["intervals"]),
         },
         "summary": {
-            "due_total": len(due_items),
+            "due_total": len(planned_items),
+            "pending_total": len(due_items),
             "selected_total": len(selected),
             "deferred_total": len(deferred),
             "overflow_total": max(len(due_items) - daily_limit, 0),
