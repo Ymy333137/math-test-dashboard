@@ -535,24 +535,24 @@ textarea:focus {
   width: 11px;
   height: 11px;
   border-radius: 2px;
-  background: #e9eeee;
-  border: 1px solid rgba(24, 58, 54, 0.04);
+  background: #edf4f6;
+  border: 1px solid rgba(15, 78, 94, 0.06);
 }
 
 .heat-1 {
-  background: #cfe4d8;
+  background: #c8f0f4;
 }
 
 .heat-2 {
-  background: #95c7aa;
+  background: #78d9e5;
 }
 
 .heat-3 {
-  background: #4d9b76;
+  background: #26a9bd;
 }
 
 .heat-4 {
-  background: #166043;
+  background: #075d78;
 }
 
 .rule-strip {

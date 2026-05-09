@@ -337,14 +337,21 @@ function renderActivity(days) {
     container.innerHTML = '<div class="empty compact-empty">暂无复盘活跃记录</div>';
     return;
   }
-  const max = Math.max(...days.map((day) => day.count), 1);
   const cells = days.map((day) => {
-    const level = day.count === 0 ? 0 : Math.max(1, Math.ceil((day.count / max) * 4));
+    const level = activityHeatLevel(day.count);
     return `<span class="heat-cell heat-${level}" title="${day.date} · ${day.count} 次"></span>`;
   }).join("");
   const total = days.reduce((sum, day) => sum + day.count, 0);
   $("#activityMeta").textContent = `近 ${days.length} 天 · ${total} 次`;
   container.innerHTML = cells;
+}
+
+function activityHeatLevel(count) {
+  if (count <= 0) return 0;
+  if (count === 1) return 1;
+  if (count <= 3) return 2;
+  if (count <= 6) return 3;
+  return 4;
 }
 
 async function loadReviewHistory() {
