@@ -396,10 +396,12 @@ function groupHistoryByDate(history) {
 
 function renderHistoryCard(event) {
   const levelClass = event.error_level ? `history-level-${event.error_level}` : "history-level-pass";
+  const tierTag = event.target_score_tier ? `<span class="history-tier">${event.target_score_tier} 分必做</span>` : "";
   return `
     <article class="history-card ${levelClass}" data-qid="${escapeHtml(event.question_id)}" data-index="${event.event_index}">
       <div class="history-main">
         <strong>${escapeHtml(event.question_id)}</strong>
+        ${tierTag}
         <span>${event.outcome === "pass" ? "对了" : `仍错 ${escapeHtml(event.error_level || "B")}`}</span>
         <span>下次 ${escapeHtml(event.next_due_at || "-")}</span>
       </div>

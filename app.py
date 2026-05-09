@@ -509,12 +509,16 @@ def build_activity(state: dict[str, Any], days: int = 112) -> list[dict[str, Any
 
 def flatten_review_history(state: dict[str, Any], limit: int = 40) -> list[dict[str, Any]]:
     events = []
+    records = records_by_question(load_book_record(state["settings"].get("active_workbook", "workbook_660")))
     for question_id, item in state.get("items", {}).items():
+        record = records.get(question_id, {})
         for index, event in enumerate(item.get("history", [])):
             events.append(
                 {
                     "question_id": question_id,
                     "event_index": index,
+                    "target_score_tier": record.get("target_score_tier"),
+                    "required_for_scores": record.get("required_for_scores", []),
                     "reviewed_at": event.get("reviewed_at"),
                     "outcome": event.get("outcome"),
                     "error_level": event.get("error_level"),

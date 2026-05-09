@@ -788,6 +788,11 @@ textarea:focus {
   background: var(--surface-2);
 }
 
+.history-main .history-tier {
+  color: var(--ink);
+  background: var(--blue-soft);
+}
+
 .history-edit {
   display: grid;
   grid-template-columns: 92px 86px minmax(180px, 1fr) auto;
