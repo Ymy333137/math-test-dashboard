@@ -40,6 +40,7 @@ DEFAULT_REVIEW_SETTINGS = {
     "daily_limit": 10,
     "selected_tiers": [90, 110, 135],
     "active_workbook": "workbook_660",
+    "first_pass_interval": 5,
     "intervals": {
         "A": [1, 3, 10, 21],
         "B": [1, 2, 5, 12, 24],
@@ -456,6 +457,7 @@ def build_review_payload(
         "settings": {
             "daily_limit": daily_limit,
             "selected_tiers": selected_tiers,
+            "first_pass_interval": int(settings.get("first_pass_interval", DEFAULT_REVIEW_SETTINGS["first_pass_interval"])),
             "intervals": settings.get("intervals", DEFAULT_REVIEW_SETTINGS["intervals"]),
         },
         "summary": {
@@ -471,10 +473,23 @@ def build_review_payload(
     }
 
 
-def next_interval_for(level: str, current_index: int, intervals: dict[str, list[int]], passed: bool) -> tuple[int, int]:
+def progress_index_for_interval(schedule: list[int], interval_days: int) -> int:
+    eligible_indexes = [index for index, days in enumerate(schedule) if days <= interval_days]
+    return max(eligible_indexes) if eligible_indexes else 0
+
+
+def next_interval_for(
+    level: str,
+    current_index: int,
+    intervals: dict[str, list[int]],
+    passed: bool,
+    first_pass_interval: int = 5,
+) -> tuple[int, int]:
     schedule = intervals.get(level) or DEFAULT_REVIEW_SETTINGS["intervals"].get(level, [1])
     if passed:
-        next_index = 1 if current_index < 0 and len(schedule) > 1 else min(current_index + 1, len(schedule) - 1)
+        if current_index < 0:
+            return progress_index_for_interval(schedule, first_pass_interval), first_pass_interval
+        next_index = min(current_index + 1, len(schedule) - 1)
     else:
         next_index = 0
     return next_index, schedule[next_index]
@@ -532,6 +547,7 @@ def flatten_review_history(state: dict[str, Any], limit: int = 40) -> list[dict[
 
 def recalculate_review_item(question_id: str, item: dict[str, Any], state: dict[str, Any]) -> None:
     intervals = state["settings"].get("intervals", DEFAULT_REVIEW_SETTINGS["intervals"])
+    first_pass_interval = int(state["settings"].get("first_pass_interval", DEFAULT_REVIEW_SETTINGS["first_pass_interval"]))
     record = records_by_question(load_book_record(state["settings"].get("active_workbook", "workbook_660"))).get(question_id, {})
     current_level = item.get("error_level") or record.get("error_level") or "B"
     interval_index = -1
@@ -548,6 +564,7 @@ def recalculate_review_item(question_id: str, item: dict[str, Any], state: dict[
             interval_index,
             intervals,
             event.get("outcome") == "pass",
+            first_pass_interval,
         )
         reviewed_date = event_review_date(event)
         next_due = reviewed_date + timedelta(days=interval_days)
@@ -565,6 +582,7 @@ def update_review_feedback(payload: ReviewFeedbackRequest) -> dict[str, Any]:
     today = date.today()
     settings = state["settings"]
     intervals = settings.get("intervals", DEFAULT_REVIEW_SETTINGS["intervals"])
+    first_pass_interval = int(settings.get("first_pass_interval", DEFAULT_REVIEW_SETTINGS["first_pass_interval"]))
     items = state.setdefault("items", {})
     current = items.setdefault(payload.question_id, {"history": [], "interval_index": -1})
 
@@ -581,6 +599,7 @@ def update_review_feedback(payload: ReviewFeedbackRequest) -> dict[str, Any]:
         int(current.get("interval_index", -1)),
         intervals,
         payload.outcome == "pass",
+        first_pass_interval,
     )
     next_due = today + timedelta(days=interval_days)
 
