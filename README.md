@@ -37,7 +37,6 @@ pixi install
 cp .env.example .env
 ```
 
-然后在 `.env` 中填写本地配置：
 
 ```dotenv
 MIMO_API_KEY=your_api_key_here
@@ -46,7 +45,6 @@ MIMO_MODEL=mimo-v2.5
 MATH_RECORDS_DIR=../records
 ```
 
-不要提交真实 `.env`。
 
 ## 启动
 
@@ -70,7 +68,7 @@ http://127.0.0.1:8000
 - `workbook_660_error_abc.md`
 - `review_state.json`
 
-这些文件不属于本 app 仓库。`.gitignore` 已经拦截常见记录文件名，防止误提交。
+这些文件不属于本 app 仓库。
 
 ### `math_records.json`
 
