@@ -70,7 +70,23 @@ async function loadDashboard() {
   state.activeBook = state.dashboard.active_workbook || state.activeBook;
   renderBookSelect();
   renderOverview();
-  setStatus(`已同步 ${state.dashboard.generated_at}`);
+  setStatus(formatSyncStatus(state.dashboard.records_sync, state.dashboard.generated_at));
+}
+
+function formatSyncStatus(sync, generatedAt) {
+  if (!sync) return `已同步 ${generatedAt}`;
+  const labels = {
+    pulled: sync.message,
+    cloned: sync.message,
+    up_to_date: "records 已是最新",
+    dirty: `${sync.message} · ${sync.dirty_count || 0} 项`,
+    diverged: sync.message,
+    error: `records 同步失败：${sync.message}`,
+    skipped: sync.message,
+    missing: sync.message,
+    disabled: sync.message
+  };
+  return labels[sync.status] || `已同步 ${generatedAt}`;
 }
 
 function renderBookSelect() {
@@ -282,7 +298,7 @@ function renderReview() {
     input.checked = review.settings.selected_tiers.includes(Number(input.value));
   });
   $("#reviewDue").textContent = review.summary.due_total;
-  $("#reviewSelected").textContent = review.summary.selected_total;
+  $("#reviewSelected").textContent = review.summary.pending_total ?? review.summary.selected_total;
   $("#reviewOverflow").textContent = review.summary.overflow_total;
   $("#reviewTodayMeta").textContent = `${review.today} · ${review.label}`;
   $("#reviewTierCounts").innerHTML = ["90", "110", "135"].map((tier) => `
@@ -371,7 +387,9 @@ function renderReviewHistory() {
   }
   container.innerHTML = groupHistoryByDate(history).map((group) => `
     <section class="history-day">
-      <div class="history-day-label"><span>${escapeHtml(group.label)}</span></div>
+      <div class="history-day-label">
+        <span>${escapeHtml(group.label)} · ${group.items.length} 题</span>
+      </div>
       <div class="history-day-items">
         ${group.items.map(renderHistoryCard).join("")}
       </div>

@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import subprocess
 from collections import Counter
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -18,11 +19,13 @@ BASE_DIR = Path(__file__).resolve().parent
 
 load_dotenv(BASE_DIR / ".env")
 
-DEFAULT_RECORDS_DIR = (BASE_DIR / "../math-records").resolve()
+DEFAULT_RECORDS_DIR = (BASE_DIR / "../records").resolve()
 RECORDS_DIR = Path(os.getenv("MATH_RECORDS_DIR", str(DEFAULT_RECORDS_DIR))).expanduser()
 if not RECORDS_DIR.is_absolute():
     RECORDS_DIR = (BASE_DIR / RECORDS_DIR).resolve()
 
+RECORDS_REPO_URL = os.getenv("MATH_RECORDS_REPO_URL", "")
+AUTO_SYNC_RECORDS = os.getenv("AUTO_SYNC_RECORDS", "1").lower() not in {"0", "false", "no", "off"}
 INDEX_FILE = RECORDS_DIR / "math_records.json"
 REVIEW_STATE_FILE = RECORDS_DIR / "review_state.json"
 OCR_OUTPUT_DIR = BASE_DIR / "ocr_output"
@@ -266,7 +269,71 @@ def build_coverage() -> list[dict[str, str]]:
     return coverage
 
 
+def git_command(args: list[str], cwd: Path | None = None, timeout: int = 20) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", *args],
+        cwd=cwd,
+        text=True,
+        capture_output=True,
+        timeout=timeout,
+        check=False,
+    )
+
+
+def records_dirty_files() -> list[str]:
+    result = git_command(["status", "--porcelain"], cwd=RECORDS_DIR)
+    if result.returncode != 0:
+        return []
+    return [line for line in result.stdout.splitlines() if line.strip()]
+
+
+def sync_records_repo() -> dict[str, Any]:
+    if not AUTO_SYNC_RECORDS:
+        return {"status": "disabled", "message": "自动同步已关闭"}
+
+    if not RECORDS_DIR.exists():
+        if not RECORDS_REPO_URL:
+            return {"status": "missing", "message": "records 目录不存在，且未配置 MATH_RECORDS_REPO_URL"}
+        result = git_command(["clone", RECORDS_REPO_URL, str(RECORDS_DIR)], cwd=BASE_DIR.parent, timeout=60)
+        if result.returncode != 0:
+            return {"status": "error", "message": result.stderr.strip() or "clone records 失败"}
+        return {"status": "cloned", "message": "已自动 clone records 仓库"}
+
+    if not (RECORDS_DIR / ".git").exists():
+        return {"status": "skipped", "message": "records 目录不是 Git 仓库，跳过自动同步"}
+
+    dirty_files = records_dirty_files()
+    if dirty_files:
+        return {
+            "status": "dirty",
+            "message": "records 有未提交改动，跳过自动同步",
+            "dirty_count": len(dirty_files),
+        }
+
+    fetch_result = git_command(["fetch", "--prune", "origin"], cwd=RECORDS_DIR, timeout=60)
+    if fetch_result.returncode != 0:
+        return {"status": "error", "message": fetch_result.stderr.strip() or "fetch records 失败"}
+
+    count_result = git_command(["rev-list", "--left-right", "--count", "HEAD...@{u}"], cwd=RECORDS_DIR)
+    if count_result.returncode != 0:
+        return {"status": "skipped", "message": "records 未配置 upstream，跳过自动同步"}
+
+    ahead_text, behind_text = count_result.stdout.strip().split()
+    ahead = int(ahead_text)
+    behind = int(behind_text)
+    if behind == 0:
+        return {"status": "up_to_date", "message": "records 已是最新", "ahead": ahead, "behind": behind}
+    if ahead > 0:
+        return {"status": "diverged", "message": "records 本地和远端都有新提交，请手动处理", "ahead": ahead, "behind": behind}
+
+    pull_result = git_command(["pull", "--ff-only"], cwd=RECORDS_DIR, timeout=60)
+    if pull_result.returncode != 0:
+        return {"status": "error", "message": pull_result.stderr.strip() or "pull records 失败", "ahead": ahead, "behind": behind}
+    return {"status": "pulled", "message": f"已自动同步 records：拉取 {behind} 个提交", "ahead": ahead, "behind": behind}
+
+
 def build_dashboard_payload() -> dict[str, Any]:
+    records_sync = sync_records_repo()
     index = load_index()
     book_records = load_all_book_records(index)
     abc_indexes = parse_abc_indexes()
@@ -284,6 +351,7 @@ def build_dashboard_payload() -> dict[str, Any]:
     return {
         "version": index.get("version"),
         "records_dir": str(RECORDS_DIR),
+        "records_sync": records_sync,
         "active_workbook": index.get("active_workbook"),
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "totals": {
@@ -423,6 +491,13 @@ def review_sort_key(item: dict[str, Any]) -> tuple:
     )
 
 
+def reviewed_on(item: dict[str, Any], target_date: date) -> bool:
+    for event in item.get("state_history", []):
+        if event_review_date(event) == target_date:
+            return True
+    return False
+
+
 def build_review_payload(
     book_id: str = "workbook_660",
     selected_tiers: list[int] | None = None,
@@ -439,16 +514,25 @@ def build_review_payload(
     for record in book_record.get("history", []):
         item = review_item_from_record(record, state, today)
         if item and item.get("target_score_tier") in selected_tiers:
+            item["state_history"] = state.get("items", {}).get(item["question_id"], {}).get("history", [])
             candidates.append(item)
 
     due_items = [item for item in candidates if item["is_due"]]
+    planned_items_by_id = {item["question_id"]: item for item in due_items}
+    for item in candidates:
+        if reviewed_on(item, today):
+            planned_items_by_id[item["question_id"]] = item
+    planned_items = list(planned_items_by_id.values())
+
     due_items.sort(key=review_sort_key)
     selected = due_items[:daily_limit]
     deferred = due_items[daily_limit:]
     tier_counts = {
-        str(tier): sum(1 for item in due_items if item.get("target_score_tier") == tier)
+        str(tier): sum(1 for item in planned_items if item.get("target_score_tier") == tier)
         for tier in [90, 110, 135]
     }
+    for item in candidates:
+        item.pop("state_history", None)
 
     return {
         "book_id": book_id,
@@ -461,7 +545,8 @@ def build_review_payload(
             "intervals": settings.get("intervals", DEFAULT_REVIEW_SETTINGS["intervals"]),
         },
         "summary": {
-            "due_total": len(due_items),
+            "due_total": len(planned_items),
+            "pending_total": len(due_items),
             "selected_total": len(selected),
             "deferred_total": len(deferred),
             "overflow_total": max(len(due_items) - daily_limit, 0),
