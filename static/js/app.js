@@ -123,7 +123,7 @@ function renderOverview() {
   $("#bookMeta").textContent = `${book.total} 条 · ${book.status || "unknown"} · ${book.recorded_range || ""}`;
 
   renderAbcChart(counts);
-  renderTrend(book.summary.recent || []);
+  renderUnitAccuracy(book.summary.unit_accuracy || []);
   renderRankList("#errorTags", book.summary.error_tags || []);
   renderRankList("#weaknessFocus", tierRankItems(book.summary.target_tiers || {}));
   renderCoverage();
@@ -153,34 +153,76 @@ function renderAbcChart(counts) {
   }).join("");
 }
 
-function renderTrend(items) {
+function renderUnitAccuracy(items) {
   if (!items.length) {
-    $("#trendChart").innerHTML = '<div class="empty">暂无趋势数据</div>';
+    $("#trendChart").innerHTML = '<div class="empty">暂无单元正确率数据</div>';
     return;
   }
-  const width = 640;
-  const height = 210;
-  const pad = 28;
-  const step = items.length > 1 ? (width - pad * 2) / (items.length - 1) : 0;
+  const width = 680;
+  const height = 250;
+  const pad = { top: 28, right: 34, bottom: 52, left: 64 };
+  const plotWidth = width - pad.left - pad.right;
+  const plotHeight = height - pad.top - pad.bottom;
+  const step = items.length > 1 ? plotWidth / (items.length - 1) : 0;
   const points = items.map((item, index) => {
-    const x = pad + step * index;
-    const y = height - pad - (Number(item.mastery || 0) * (height - pad * 2));
+    const x = items.length > 1 ? pad.left + step * index : pad.left + plotWidth / 2;
+    const y = pad.top + ((1 - Number(item.accuracy || 0)) * plotHeight);
     return { x, y, item };
   });
   const path = points.map((point, index) => `${index === 0 ? "M" : "L"} ${point.x} ${point.y}`).join(" ");
   const circles = points.map((point) => `
-    <circle cx="${point.x}" cy="${point.y}" r="4">
-      <title>${point.item.question_id}: ${formatPercent(point.item.mastery)}</title>
-    </circle>
+    <g class="chart-point" tabindex="0"
+      data-label="${escapeHtml(point.item.label)}"
+      data-accuracy="${formatPercent(point.item.accuracy)}"
+      data-ratio="${point.item.correct}/${point.item.total}"
+      transform="translate(${point.x} ${point.y})">
+      <circle r="6"></circle>
+      <circle class="chart-hit" r="18"></circle>
+    </g>
+  `).join("");
+  const labels = points.map((point) => `
+    <text x="${point.x}" y="${height - 16}" text-anchor="middle">${escapeHtml(point.item.label)}</text>
   `).join("");
   $("#trendChart").innerHTML = `
-    <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="最近掌握度趋势">
-      <line x1="${pad}" y1="${height - pad}" x2="${width - pad}" y2="${height - pad}" stroke="#d9dfdc" />
-      <line x1="${pad}" y1="${pad}" x2="${pad}" y2="${height - pad}" stroke="#d9dfdc" />
+    <div class="chart-tooltip" id="unitAccuracyTooltip" role="status"></div>
+    <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="单元初始正确率">
+      <line x1="${pad.left}" y1="${pad.top}" x2="${width - pad.right}" y2="${pad.top}" class="chart-grid" />
+      <line x1="${pad.left}" y1="${pad.top + plotHeight / 2}" x2="${width - pad.right}" y2="${pad.top + plotHeight / 2}" class="chart-grid" />
+      <line x1="${pad.left}" y1="${height - pad.bottom}" x2="${width - pad.right}" y2="${height - pad.bottom}" class="chart-axis" />
+      <line x1="${pad.left}" y1="${pad.top}" x2="${pad.left}" y2="${height - pad.bottom}" class="chart-axis" />
+      <text x="${pad.left - 14}" y="${pad.top + 5}" text-anchor="end">100%</text>
+      <text x="${pad.left - 14}" y="${pad.top + plotHeight / 2 + 5}" text-anchor="end">50%</text>
+      <text x="${pad.left - 14}" y="${height - pad.bottom + 5}" text-anchor="end">0%</text>
       <path d="${path}" fill="none" stroke="#1f7a6b" stroke-width="3" />
-      <g fill="#183a36">${circles}</g>
+      <g>${circles}</g>
+      <g class="chart-labels">${labels}</g>
     </svg>
   `;
+  bindUnitAccuracyTooltip();
+}
+
+function bindUnitAccuracyTooltip() {
+  const chart = $("#trendChart");
+  const tooltip = $("#unitAccuracyTooltip");
+  if (!chart || !tooltip) return;
+
+  chart.querySelectorAll(".chart-point").forEach((point) => {
+    const show = () => {
+      const rect = point.getBoundingClientRect();
+      const chartRect = chart.getBoundingClientRect();
+      tooltip.innerHTML = `
+        <strong>${escapeHtml(point.dataset.label)}</strong>
+        <span>${escapeHtml(point.dataset.accuracy)} · ${escapeHtml(point.dataset.ratio)}</span>
+      `;
+      tooltip.style.left = `${rect.left - chartRect.left + rect.width / 2}px`;
+      tooltip.style.top = `${rect.top - chartRect.top}px`;
+      tooltip.classList.add("visible");
+    };
+    point.addEventListener("mouseenter", show);
+    point.addEventListener("focus", show);
+    point.addEventListener("mouseleave", () => tooltip.classList.remove("visible"));
+    point.addEventListener("blur", () => tooltip.classList.remove("visible"));
+  });
 }
 
 function renderRankList(selector, items) {

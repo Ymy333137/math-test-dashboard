@@ -228,7 +228,40 @@ def summarize_records(records: list[dict[str, Any]]) -> dict[str, Any]:
         "error_tags": [{"name": name, "count": count} for name, count in error_counter.most_common(10)],
         "error_levels": {level: level_counter.get(level, 0) for level in ["A", "B", "C"]},
         "target_tiers": {tier: tier_counter.get(tier, 0) for tier in ["90", "110", "135"]},
+        "unit_accuracy": summarize_unit_accuracy(records),
     }
+
+
+def unit_sort_key(unit_id: str) -> tuple[int, str]:
+    match = re.search(r"(\d+)$", unit_id or "")
+    return (int(match.group(1)) if match else 999, unit_id or "")
+
+
+def summarize_unit_accuracy(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    units: dict[str, dict[str, Any]] = {}
+    for record in records:
+        unit_id = record.get("unit") or "unknown"
+        unit = units.setdefault(unit_id, {"unit_id": unit_id, "total": 0, "correct": 0})
+        unit["total"] += 1
+        if record.get("error_level") is None:
+            unit["correct"] += 1
+
+    results = []
+    for unit in sorted(units.values(), key=lambda item: unit_sort_key(item["unit_id"])):
+        total = unit["total"]
+        correct = unit["correct"]
+        unit_number = re.search(r"(\d+)$", unit["unit_id"] or "")
+        label = f"第{unit_number.group(1)}单元" if unit_number else unit["unit_id"]
+        results.append(
+            {
+                "unit_id": unit["unit_id"],
+                "label": label,
+                "total": total,
+                "correct": correct,
+                "accuracy": round(correct / total, 4) if total else 0,
+            }
+        )
+    return results
 
 
 def build_books(index: dict[str, Any], book_records: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
@@ -446,9 +479,11 @@ def review_item_from_record(record: dict[str, Any], state: dict[str, Any], today
 
     state_item = state.get("items", {}).get(question_id, {})
     level = state_item.get("error_level") or base_level
-    next_due = date_from_iso(state_item.get("next_due_at")) or today
     last_reviewed = state_item.get("last_reviewed_at")
     history = state_item.get("history", [])
+    next_due = date_from_iso(state_item.get("next_due_at"))
+    if next_due is None:
+        next_due = today if history else today + timedelta(days=1)
     fail_count = sum(1 for event in history if event.get("outcome") != "pass")
     recent_fail_count = sum(1 for event in history[-5:] if event.get("outcome") != "pass")
     overdue_days = max((today - next_due).days, 0)
