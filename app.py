@@ -465,6 +465,7 @@ def default_review_schedule() -> dict[str, Any]:
             "key_format": "book_id:question_id",
         },
         "buckets": {},
+        "daily_plans": {},
     }
 
 
@@ -476,7 +477,9 @@ def load_review_schedule() -> dict[str, Any]:
     schedule.setdefault("timezone", "Asia/Shanghai")
     schedule.setdefault("policy", default_review_schedule()["policy"])
     schedule.setdefault("buckets", {})
+    schedule.setdefault("daily_plans", {})
     schedule["buckets"] = normalize_schedule_buckets(schedule["buckets"])
+    schedule["daily_plans"] = normalize_schedule_buckets(schedule["daily_plans"])
     return schedule
 
 
@@ -514,6 +517,11 @@ def save_review_schedule(schedule: dict[str, Any]) -> None:
     schedule["buckets"] = {
         due_at: buckets[due_at]
         for due_at in sorted(buckets)
+    }
+    daily_plans = normalize_schedule_buckets(schedule.get("daily_plans", {}))
+    schedule["daily_plans"] = {
+        due_at: daily_plans[due_at]
+        for due_at in sorted(daily_plans)
     }
     write_json(REVIEW_SCHEDULE_FILE, schedule)
 
@@ -594,6 +602,28 @@ def add_schedule_key(schedule: dict[str, Any], due_at: date, key: str, replace: 
     return True
 
 
+def add_daily_plan_keys(schedule: dict[str, Any], target_date: date, keys: list[str]) -> bool:
+    plan = schedule.setdefault("daily_plans", {}).setdefault(target_date.isoformat(), [])
+    changed = False
+    for key in keys:
+        if key and key not in plan:
+            plan.append(key)
+            changed = True
+    if changed:
+        plan.sort(key=lambda item: parse_question_number(question_id_from_schedule_key(item)))
+    return changed
+
+
+def reviewed_keys_on_date(book_id: str, state: dict[str, Any], target_date: date) -> list[str]:
+    keys = []
+    for question_id, item in state.get("items", {}).items():
+        for event in item.get("history", []):
+            if event_review_date(event) == target_date:
+                keys.append(schedule_key(book_id, question_id))
+                break
+    return keys
+
+
 def rollover_schedule(schedule: dict[str, Any], today: date) -> bool:
     buckets = schedule.setdefault("buckets", {})
     today_key = today.isoformat()
@@ -625,6 +655,10 @@ def ensure_review_schedule(book_id: str, book_record: dict[str, Any], state: dic
             due_at = recorded_date + timedelta(days=1)
             changed = add_schedule_key(schedule, due_at, key, replace=False) or changed
 
+    today_keys = schedule_entries_for_date(schedule, today)
+    reviewed_today_keys = reviewed_keys_on_date(book_id, state, today)
+    changed = add_daily_plan_keys(schedule, today, [*today_keys, *reviewed_today_keys]) or changed
+
     if changed:
         save_review_schedule(schedule)
     return schedule
@@ -632,6 +666,10 @@ def ensure_review_schedule(book_id: str, book_record: dict[str, Any], state: dic
 
 def schedule_entries_for_date(schedule: dict[str, Any], target_date: date) -> list[str]:
     return schedule.get("buckets", {}).get(target_date.isoformat(), [])
+
+
+def schedule_plan_for_date(schedule: dict[str, Any], target_date: date) -> list[str]:
+    return schedule.get("daily_plans", {}).get(target_date.isoformat(), [])
 
 
 def review_item_from_record(
@@ -716,6 +754,9 @@ def build_review_payload(
     scheduled_today = schedule_entries_for_date(schedule, today)
     scheduled_question_ids = [question_id_from_schedule_key(key) for key in scheduled_today]
     scheduled_question_ids = [question_id for question_id in scheduled_question_ids if question_id]
+    planned_today = schedule_plan_for_date(schedule, today)
+    planned_question_ids = [question_id_from_schedule_key(key) for key in planned_today]
+    planned_question_ids = [question_id for question_id in planned_question_ids if question_id]
 
     candidates = []
     records = records_by_question(book_record)
@@ -729,10 +770,13 @@ def build_review_payload(
             candidates.append(item)
 
     due_items = candidates
-    planned_items_by_id = {item["question_id"]: item for item in due_items}
-    for record in book_record.get("history", []):
-        item = review_item_from_record(record, state, today)
-        if item and item.get("target_score_tier") in selected_tiers and reviewed_on(item, today):
+    planned_items_by_id = {}
+    for question_id in planned_question_ids:
+        record = records.get(question_id)
+        if not record:
+            continue
+        item = review_item_from_record(record, state, today, scheduled_due=today)
+        if item and item.get("target_score_tier") in selected_tiers:
             planned_items_by_id[item["question_id"]] = item
     planned_items = list(planned_items_by_id.values())
 
@@ -761,7 +805,7 @@ def build_review_payload(
             "pending_total": len(due_items),
             "selected_total": len(selected),
             "deferred_total": len(deferred),
-            "overflow_total": max(len(due_items) - daily_limit, 0),
+            "overflow_total": max(len(planned_items) - daily_limit, 0),
             "tier_counts": tier_counts,
         },
         "activity": build_activity(state),
