@@ -372,7 +372,7 @@ function renderReviewCard(item, withActions) {
           <span>${item.target_score_tier} 分必做</span>
           <span>${item.is_new ? "新错题" : `复习 ${item.review_count} 次`}</span>
           <span>${item.overdue_days ? `逾期 ${item.overdue_days} 天` : "今日到期"}</span>
-          <span>失败 ${item.recent_fail_count}/${item.fail_count}</span>
+          <span>失败 ${item.fail_count} 次</span>
         </div>
         <p>${escapeHtml(summary)}</p>
         ${withActions ? `
@@ -457,6 +457,8 @@ function groupHistoryByDate(history) {
 function renderHistoryCard(event) {
   const levelClass = event.error_level ? `history-level-${event.error_level}` : "history-level-pass";
   const tierTag = event.target_score_tier ? `<span class="history-tier">${event.target_score_tier} 分必做</span>` : "";
+  const reviewTag = Number.isFinite(event.review_count) ? `<span>复习 ${event.review_count} 次</span>` : "";
+  const failTag = Number.isFinite(event.fail_count) ? `<span>失败 ${event.fail_count} 次</span>` : "";
   return `
     <article class="history-card ${levelClass}" data-qid="${escapeHtml(event.question_id)}" data-index="${event.event_index}">
       <div class="history-main">
@@ -464,6 +466,8 @@ function renderHistoryCard(event) {
         <span>${event.outcome === "pass" ? "对了" : `仍错 ${escapeHtml(event.error_level || "B")}`}</span>
         <span>下次 ${escapeHtml(event.next_due_at || "-")}</span>
         ${tierTag}
+        ${reviewTag}
+        ${failTag}
       </div>
       <div class="history-edit">
         <select class="history-outcome">

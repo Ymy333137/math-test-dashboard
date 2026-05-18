@@ -690,7 +690,8 @@ def review_item_from_record(
     next_due = date_from_iso(state_item.get("next_due_at"))
     if next_due is None:
         next_due = scheduled_due or (today if history else today + timedelta(days=1))
-    fail_count = sum(1 for event in history if event.get("outcome") != "pass")
+    review_fail_count = sum(1 for event in history if event.get("outcome") != "pass")
+    fail_count = 1 + review_fail_count
     recent_fail_count = sum(1 for event in history[-5:] if event.get("outcome") != "pass")
     overdue_days = max((today - next_due).days, 0)
 
@@ -708,6 +709,7 @@ def review_item_from_record(
         "last_reviewed_at": last_reviewed,
         "interval_index": state_item.get("interval_index", -1),
         "review_count": len(history),
+        "review_fail_count": review_fail_count,
         "fail_count": fail_count,
         "recent_fail_count": recent_fail_count,
         "overdue_days": overdue_days,
@@ -869,11 +871,16 @@ def flatten_review_history(state: dict[str, Any], limit: int = 40) -> list[dict[
     records = records_by_question(load_book_record(state["settings"].get("active_workbook", "workbook_660")))
     for question_id, item in state.get("items", {}).items():
         record = records.get(question_id, {})
+        cumulative_fail_count = 1 if record.get("error_level") else 0
         for index, event in enumerate(item.get("history", [])):
+            if event.get("outcome") != "pass":
+                cumulative_fail_count += 1
             events.append(
                 {
                     "question_id": question_id,
                     "event_index": index,
+                    "review_count": index + 1,
+                    "fail_count": cumulative_fail_count,
                     "target_score_tier": record.get("target_score_tier"),
                     "required_for_scores": record.get("required_for_scores", []),
                     "reviewed_at": event.get("reviewed_at"),
