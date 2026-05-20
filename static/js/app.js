@@ -423,6 +423,8 @@ async function loadReviewHistory() {
 function renderReviewHistory() {
   const container = $("#reviewHistory");
   const history = state.reviewHistory?.history || [];
+  const totalReviews = state.reviewHistory?.total_reviews || 0;
+  $("#reviewHistoryTotal").textContent = `累计复盘 ${totalReviews} 题`;
   if (!history.length) {
     container.innerHTML = '<div class="empty">暂无复盘记录。完成一次回滚后会出现在这里。</div>';
     return;

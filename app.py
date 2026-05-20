@@ -894,6 +894,10 @@ def flatten_review_history(state: dict[str, Any], limit: int = 40) -> list[dict[
     return events[:limit]
 
 
+def count_review_events(state: dict[str, Any]) -> int:
+    return sum(len(item.get("history", [])) for item in state.get("items", {}).values())
+
+
 def recalculate_review_item(question_id: str, item: dict[str, Any], state: dict[str, Any]) -> None:
     intervals = state["settings"].get("intervals", DEFAULT_REVIEW_SETTINGS["intervals"])
     first_pass_interval = int(state["settings"].get("first_pass_interval", DEFAULT_REVIEW_SETTINGS["first_pass_interval"]))
@@ -1093,7 +1097,13 @@ async def api_review_feedback(payload: ReviewFeedbackRequest):
 @app.get("/api/review/history")
 async def api_review_history(limit: int = Query(default=40, ge=1, le=200)):
     state = load_review_state()
-    return JSONResponse(content={"history": flatten_review_history(state, limit), "activity": build_activity(state)})
+    return JSONResponse(
+        content={
+            "history": flatten_review_history(state, limit),
+            "activity": build_activity(state),
+            "total_reviews": count_review_events(state),
+        }
+    )
 
 
 @app.patch("/api/review/history/{question_id}/{event_index}")
