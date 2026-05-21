@@ -511,11 +511,28 @@ function bindFeedbackButtons() {
 }
 
 function bindHistorySaves() {
+  $$(".history-card").forEach((card) => {
+    const outcomeSelect = card.querySelector(".history-outcome");
+    const levelSelect = card.querySelector(".history-level");
+    levelSelect.addEventListener("change", () => {
+      if (levelSelect.value) outcomeSelect.value = "wrong";
+    });
+    outcomeSelect.addEventListener("change", () => {
+      if (outcomeSelect.value === "pass") {
+        levelSelect.value = "";
+      } else if (!levelSelect.value) {
+        levelSelect.value = "B";
+      }
+    });
+  });
+
   $$(".history-save").forEach((button) => {
     button.addEventListener("click", async () => {
       const card = button.closest(".history-card");
-      const outcome = card.querySelector(".history-outcome").value;
-      const level = card.querySelector(".history-level").value;
+      let outcome = card.querySelector(".history-outcome").value;
+      let level = card.querySelector(".history-level").value;
+      if (level && outcome === "pass") outcome = "wrong";
+      if (outcome === "wrong" && !level) level = "B";
       const payload = {
         outcome,
         error_level: outcome === "wrong" ? (level || "B") : null,
