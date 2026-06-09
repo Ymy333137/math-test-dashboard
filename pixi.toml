@@ -6,7 +6,9 @@ platforms = ["osx-arm64"]
 version = "0.1.0"
 
 [tasks]
-dev = "python -m uvicorn app:app --reload --host 127.0.0.1 --port 8000"
+default = "sh -c '(sleep 1; open -a \"Google Chrome\" http://127.0.0.1:8000 >/dev/null 2>&1) & python -m uvicorn app:app --reload --host 127.0.0.1 --port 8000'"
+dev = "sh -c '(sleep 1; open -a \"Google Chrome\" http://127.0.0.1:8000 >/dev/null 2>&1) & python -m uvicorn app:app --reload --host 127.0.0.1 --port 8000'"
+serve = "python -m uvicorn app:app --reload --host 127.0.0.1 --port 8000"
 
 [dependencies]
 fastapi = ">=0.136.1,<0.137"
