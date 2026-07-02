@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>数学错题工作台</title>
-  <link rel="stylesheet" href="/static/css/app.css?v=20260521-history-edit">
+  <link rel="stylesheet" href="/static/css/app.css?v=20260702-review-responsive">
 </head>
 <body>
   <div class="shell">
@@ -13,7 +13,7 @@
         <div class="brand-mark">M</div>
         <div>
           <h1>数学错题工作台</h1>
-          <p>本地记录 · OCR · 掌握度</p>
+          <p>本地记录 · 回滚 · 掌握度</p>
         </div>
       </div>
 
@@ -21,7 +21,6 @@
         <button class="nav-item active" data-target="overview">总览</button>
         <button class="nav-item" data-target="review">回滚复习</button>
         <button class="nav-item" data-target="errors">错题记录</button>
-        <button class="nav-item" data-target="ocr">OCR 批次</button>
       </nav>
 
       <div class="book-panel">
@@ -204,45 +203,9 @@
         </section>
       </section>
 
-      <section class="view" id="ocrView">
-        <div class="ocr-grid">
-          <section class="panel">
-            <div class="panel-head">
-              <h3>OCR 新批次</h3>
-              <span>粘贴或上传图片</span>
-            </div>
-            <form id="ocrForm" class="ocr-form">
-              <label>
-                题号范围
-                <input id="questionRange" name="questionRange" placeholder="例如 800-133-145" required>
-              </label>
-              <label>
-                批次备注
-                <textarea id="batchNote" name="batchNote" placeholder="例如 第二单元导数基础题；可留空"></textarea>
-              </label>
-              <div class="upload-box" id="uploadBox" tabindex="0">
-                <input id="imageInput" type="file" accept="image/*" multiple>
-                <strong>点击选择图片，或直接粘贴截图</strong>
-                <span>支持多张图片，按当前预览顺序发送</span>
-              </div>
-              <div class="preview-grid" id="previewGrid"></div>
-              <button class="primary-action" id="ocrSubmit" type="submit">生成题目 Markdown</button>
-            </form>
-          </section>
-
-          <section class="panel">
-            <div class="panel-head">
-              <h3>识别结果</h3>
-              <span id="ocrState">等待提交</span>
-            </div>
-            <pre class="ocr-output" id="ocrOutput">识别结果会显示在这里。</pre>
-            <div class="file-note" id="ocrFile"></div>
-          </section>
-        </div>
-      </section>
     </main>
   </div>
 
-  <script src="/static/js/app.js?v=20260521-history-edit"></script>
+  <script src="/static/js/app.js?v=20260702-dashboard-cleanup"></script>
 </body>
 </html>

@@ -1,6 +1,9 @@
 # Math Test Dashboard
 
-本地数学错题工作台，用于查看错题记录、执行机械式回滚复习、维护复盘历史，并通过多模态 OCR 生成题目 Markdown。
+本地数学错题工作台，用于查看错题记录、执行机械式回滚复习、维护复盘历史和展示单元掌握情况。
+
+> [!NOTE]
+> 自 v0.3.0 起，OCR 批次功能已弃用并从项目中移除。当前版本聚焦于错题记录可视化、机械式回滚复习与复盘历史管理。
 
 这个仓库只保存 app 代码。个人错题记录、复盘状态放在本地其他目录。
 
@@ -10,7 +13,6 @@
 - 回滚复习：按 A/B/C 等级和目标分层生成每日复习队列。
 - 复盘记录：支持给每次复盘写 comment，并在点错时修改历史记录。
 - 活跃图：以 Git 风格热力图展示近期复盘活跃度。
-- OCR 批次：调用 OpenAI-compatible 多模态接口，把题目图片识别为 Markdown。
 
 ## 本地目录约定
 
@@ -39,9 +41,6 @@ cp .env.example .env
 
 
 ```dotenv
-MIMO_API_KEY=your_api_key_here
-MIMO_BASE_URL=https://token-plan-cn.xiaomimimo.com/v1
-MIMO_MODEL=mimo-v2.5
 MATH_RECORDS_DIR=../records
 ```
 
@@ -49,7 +48,7 @@ MATH_RECORDS_DIR=../records
 ## 启动
 
 ```bash
-pixi run uvicorn app:app --host 127.0.0.1 --port 8000
+pixi run dev
 ```
 
 打开：

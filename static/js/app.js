@@ -4,8 +4,7 @@ const state = {
   review: null,
   reviewHistory: null,
   activeBook: "workbook_660",
-  activeLevel: "all",
-  images: []
+  activeLevel: "all"
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -32,7 +31,6 @@ async function fetchJson(url, options) {
 async function init() {
   bindNavigation();
   bindLevelTabs();
-  bindOcr();
   bindReviewControls();
   await loadDashboard();
   await loadBookErrors(state.activeBook);
@@ -557,87 +555,6 @@ function formatDateTime(value) {
 function formatDateOnly(value) {
   if (!value) return "未记录日期";
   return value.slice(0, 10);
-}
-
-function bindOcr() {
-  const input = $("#imageInput");
-  $("#uploadBox").addEventListener("click", (event) => {
-    if (event.target !== input) input.click();
-  });
-  input.addEventListener("change", () => addFiles([...input.files]));
-  document.addEventListener("paste", (event) => {
-    const files = [...event.clipboardData.items]
-      .filter((item) => item.type.startsWith("image/"))
-      .map((item) => item.getAsFile())
-      .filter(Boolean);
-    if (files.length) {
-      event.preventDefault();
-      addFiles(files);
-    }
-  });
-  $("#ocrForm").addEventListener("submit", submitOcr);
-}
-
-function addFiles(files) {
-  files.filter((file) => file.type.startsWith("image/")).forEach((file) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      state.images.push({ name: file.name, data_url: reader.result });
-      renderPreviews();
-    };
-    reader.readAsDataURL(file);
-  });
-}
-
-function renderPreviews() {
-  $("#previewGrid").innerHTML = state.images.map((image, index) => `
-    <div class="preview-item">
-      <img src="${image.data_url}" alt="${escapeHtml(image.name || `image-${index + 1}`)}">
-      <button type="button" aria-label="移除图片" data-remove="${index}">×</button>
-    </div>
-  `).join("");
-  $$("#previewGrid button[data-remove]").forEach((button) => {
-    button.addEventListener("click", () => {
-      state.images.splice(Number(button.dataset.remove), 1);
-      renderPreviews();
-    });
-  });
-}
-
-async function submitOcr(event) {
-  event.preventDefault();
-  if (!state.images.length) {
-    $("#ocrState").textContent = "请先添加图片";
-    return;
-  }
-  const button = $("#ocrSubmit");
-  button.disabled = true;
-  $("#ocrState").textContent = "识别中";
-  $("#ocrOutput").textContent = "正在调用多模态模型，请稍等。";
-  $("#ocrFile").textContent = "";
-  try {
-    const result = await fetchJson("/api/ocr", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        book_id: state.activeBook,
-        question_range: $("#questionRange").value.trim(),
-        note: $("#batchNote").value.trim(),
-        images: state.images
-      })
-    });
-    $("#ocrState").textContent = `完成 · 估计 ${result.question_count} 题`;
-    $("#ocrOutput").textContent = result.text || "模型未返回文本。";
-    $("#ocrFile").textContent = `已生成：${result.file_path}`;
-    state.images = [];
-    renderPreviews();
-    $("#ocrForm").reset();
-  } catch (error) {
-    $("#ocrState").textContent = "失败";
-    $("#ocrOutput").textContent = error.message;
-  } finally {
-    button.disabled = false;
-  }
 }
 
 function escapeHtml(value) {

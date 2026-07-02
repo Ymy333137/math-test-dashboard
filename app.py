@@ -12,7 +12,6 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from openai import OpenAI
 from pydantic import BaseModel, Field
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -29,9 +28,8 @@ AUTO_SYNC_RECORDS = os.getenv("AUTO_SYNC_RECORDS", "1").lower() not in {"0", "fa
 INDEX_FILE = RECORDS_DIR / "math_records.json"
 REVIEW_STATE_FILE = RECORDS_DIR / "review_state.json"
 REVIEW_SCHEDULE_FILE = RECORDS_DIR / "review_schedule.json"
-OCR_OUTPUT_DIR = BASE_DIR / "ocr_output"
 
-app = FastAPI(title="数学错题工作台", version="0.2.0")
+app = FastAPI(title="数学错题工作台", version="0.3.0")
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
 
@@ -64,18 +62,6 @@ CHINESE_UNIT_NUMBERS = {
     "九": 9,
     "十": 10,
 }
-
-
-class OCRImage(BaseModel):
-    data_url: str = Field(..., description="data:{mime};base64,... image payload")
-    name: str | None = None
-
-
-class OCRRequest(BaseModel):
-    book_id: str = Field(default="workbook_660")
-    question_range: str = Field(..., min_length=1)
-    note: str | None = None
-    images: list[OCRImage] = Field(..., min_length=1)
 
 
 class ReviewSettingsRequest(BaseModel):
@@ -1035,20 +1021,6 @@ def update_review_event(question_id: str, event_index: int, payload: ReviewEvent
     }
 
 
-def sanitize_filename_part(value: str) -> str:
-    safe = re.sub(r"[^0-9A-Za-z\u4e00-\u9fff_-]+", "-", value).strip("-")
-    return safe or "batch"
-
-
-def get_mimo_client() -> tuple[OpenAI, str]:
-    api_key = os.getenv("MIMO_API_KEY")
-    if not api_key:
-        raise HTTPException(status_code=500, detail="未配置 MIMO_API_KEY，请在本地 .env 或环境变量中设置")
-    base_url = os.getenv("MIMO_BASE_URL", "https://token-plan-cn.xiaomimimo.com/v1")
-    model = os.getenv("MIMO_MODEL", "mimo-v2.5")
-    return OpenAI(api_key=api_key, base_url=base_url), model
-
-
 @app.get("/")
 async def index(request: Request):
     return templates.TemplateResponse(request, "index.html")
@@ -1109,83 +1081,3 @@ async def api_review_history(limit: int = Query(default=40, ge=1, le=200)):
 @app.patch("/api/review/history/{question_id}/{event_index}")
 async def api_review_history_update(question_id: str, event_index: int, payload: ReviewEventUpdateRequest):
     return JSONResponse(content=update_review_event(question_id, event_index, payload))
-
-
-@app.get("/api/ocr/files")
-async def api_ocr_files(book_id: str = "workbook_660"):
-    output_dir = OCR_OUTPUT_DIR / sanitize_filename_part(book_id)
-    files = []
-    if output_dir.exists():
-        for path in sorted(output_dir.glob("*.md"), key=lambda item: item.stat().st_mtime, reverse=True):
-            files.append(
-                {
-                    "filename": path.name,
-                    "path": str(path.relative_to(BASE_DIR)),
-                    "created": datetime.fromtimestamp(path.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S"),
-                }
-            )
-    return JSONResponse(content={"files": files})
-
-
-@app.post("/api/ocr")
-async def api_ocr(payload: OCRRequest):
-    client, model = get_mimo_client()
-    content: list[dict[str, Any]] = [
-        {"type": "image_url", "image_url": {"url": image.data_url}} for image in payload.images
-    ]
-    user_text = (
-        f"题册：{display_book_label(payload.book_id)}\n"
-        f"题号范围：{payload.question_range}\n"
-        f"批次备注：{payload.note or '无'}\n\n"
-        "请识别图片中的数学题目，只输出题号和题目正文。"
-        "保留习题册原题号；不要输出题头、题组名、章节名、页眉、页脚、说明文字或任何额外标题。"
-        "不要解题，不要判断对错，不要添加讲解。"
-        "如果一张图包含多个题目，按题号顺序逐题输出。"
-    )
-    content.append({"type": "text", "text": user_text})
-
-    try:
-        completion = client.chat.completions.create(
-            model=model,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "你是数学题目 OCR 整理助手，只负责把图片中的题号和题目正文转写成 Markdown/LaTeX。"
-                        "输出中不得包含题头、题组名、章节名、页眉、页脚、说明文字、解答或讲解。"
-                    ),
-                },
-                {"role": "user", "content": content},
-            ],
-            max_completion_tokens=4096,
-        )
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"OCR 调用失败：{exc}") from exc
-
-    text = completion.choices[0].message.content or ""
-    question_count = len(set(re.findall(r"\b\d+\b", text)))
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    safe_range = sanitize_filename_part(payload.question_range)
-    safe_book = sanitize_filename_part(payload.book_id)
-    output_dir = OCR_OUTPUT_DIR / safe_book
-    output_dir.mkdir(parents=True, exist_ok=True)
-    filename = f"{safe_book}_{safe_range}_{timestamp}.md"
-    output_path = output_dir / filename
-    header = (
-        f"# {display_book_label(payload.book_id)} OCR 批次\n\n"
-        f"- 生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-        f"- 题号范围：{payload.question_range}\n"
-        f"- 图片数量：{len(payload.images)}\n"
-        f"- 批次备注：{payload.note or '无'}\n\n"
-        "---\n\n"
-    )
-    output_path.write_text(header + text.strip() + "\n", encoding="utf-8")
-
-    return JSONResponse(
-        content={
-            "success": True,
-            "text": text,
-            "question_count": question_count,
-            "file_path": str(output_path.relative_to(BASE_DIR)),
-        }
-    )
