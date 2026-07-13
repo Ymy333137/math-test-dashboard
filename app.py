@@ -36,12 +36,23 @@ templates = Jinja2Templates(directory=BASE_DIR / "templates")
 BOOK_LABELS = {
     "workbook_660": "题册660",
     "workbook_800": "题册800",
+    "workbook_880": "题册880",
 }
+
+TierValue = int | str
+
+DEFAULT_TIER_OPTIONS_BY_BOOK: dict[str, list[TierValue]] = {
+    "workbook_660": [90, 110, 135],
+    "workbook_880": ["120以下", "120+"],
+}
+
+REVIEWABLE_BOOK_STATUSES = {"active", "review_only"}
 
 DEFAULT_REVIEW_SETTINGS = {
     "daily_limit": 10,
-    "selected_tiers": [90, 110, 135],
+    "selected_tiers": [90, 110, 135, "120以下", "120+"],
     "active_workbook": "workbook_660",
+    "tier_schema_version": 2,
     "first_pass_interval": 5,
     "intervals": {
         "A": [1, 3, 10, 21],
@@ -66,10 +77,11 @@ CHINESE_UNIT_NUMBERS = {
 
 class ReviewSettingsRequest(BaseModel):
     daily_limit: int = Field(default=10, ge=1, le=200)
-    selected_tiers: list[int] = Field(default_factory=lambda: [90, 110, 135])
+    selected_tiers: list[TierValue] = Field(default_factory=lambda: DEFAULT_REVIEW_SETTINGS["selected_tiers"].copy())
 
 
 class ReviewFeedbackRequest(BaseModel):
+    book_id: str
     question_id: str
     outcome: str = Field(..., pattern="^(pass|wrong)$")
     error_level: str | None = Field(default=None, pattern="^[ABC]$")
@@ -77,6 +89,7 @@ class ReviewFeedbackRequest(BaseModel):
 
 
 class ReviewEventUpdateRequest(BaseModel):
+    book_id: str
     outcome: str = Field(..., pattern="^(pass|wrong)$")
     error_level: str | None = Field(default=None, pattern="^[ABC]$")
     note: str | None = None
@@ -125,6 +138,47 @@ def load_all_book_records(index: dict[str, Any] | None = None) -> dict[str, dict
         if path.exists():
             records[book_id] = read_json(path)
     return records
+
+
+def score_tiers_for_book(book_id: str, index: dict[str, Any] | None = None) -> list[TierValue]:
+    index = index or load_index()
+    configured = index.get("units", {}).get(book_id, {}).get("score_tiers")
+    if configured:
+        return configured
+    return DEFAULT_TIER_OPTIONS_BY_BOOK.get(book_id, [])
+
+
+def reviewable_book_ids(index: dict[str, Any] | None = None) -> list[str]:
+    index = index or load_index()
+    units = index.get("units", {})
+    active_book = index.get("active_workbook")
+    book_ids = [
+        book_id
+        for book_id in index.get("record_files", {})
+        if units.get(book_id, {}).get("status") in REVIEWABLE_BOOK_STATUSES
+    ]
+    return sorted(book_ids, key=lambda book_id: (book_id != active_book, book_id))
+
+
+def load_reviewable_book_records(index: dict[str, Any] | None = None) -> dict[str, dict[str, Any]]:
+    index = index or load_index()
+    return {book_id: load_book_record(book_id) for book_id in reviewable_book_ids(index)}
+
+
+def tier_groups(index: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    index = index or load_index()
+    return [
+        {
+            "book_id": book_id,
+            "label": display_book_label(book_id),
+            "tiers": score_tiers_for_book(book_id, index),
+        }
+        for book_id in reviewable_book_ids(index)
+    ]
+
+
+def all_review_tiers(index: dict[str, Any] | None = None) -> list[TierValue]:
+    return [tier for group in tier_groups(index) for tier in group["tiers"]]
 
 
 def unit_label_to_id(label: str) -> str:
@@ -186,6 +240,14 @@ def records_by_question(book_record: dict[str, Any]) -> dict[str, dict[str, Any]
     return {record.get("question_id"): record for record in book_record.get("history", []) if record.get("question_id")}
 
 
+def enriched_history_records(book_record: dict[str, Any]) -> list[dict[str, Any]]:
+    full_records = full_records_by_question(book_record)
+    return [
+        {**record, **full_records.get(record.get("question_id"), {})}
+        for record in book_record.get("history", [])
+    ]
+
+
 def summarize_records(records: list[dict[str, Any]]) -> dict[str, Any]:
     error_counter: Counter[str] = Counter()
     level_counter: Counter[str] = Counter()
@@ -214,7 +276,7 @@ def summarize_records(records: list[dict[str, Any]]) -> dict[str, Any]:
         ],
         "error_tags": [{"name": name, "count": count} for name, count in error_counter.most_common(10)],
         "error_levels": {level: level_counter.get(level, 0) for level in ["A", "B", "C"]},
-        "target_tiers": {tier: tier_counter.get(tier, 0) for tier in ["90", "110", "135"]},
+        "target_tiers": dict(tier_counter),
         "unit_accuracy": summarize_unit_accuracy(records),
     }
 
@@ -227,8 +289,8 @@ def unit_sort_key(unit_id: str) -> tuple[int, str]:
 def summarize_unit_accuracy(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     units: dict[str, dict[str, Any]] = {}
     for record in records:
-        unit_id = record.get("unit") or "unknown"
-        unit = units.setdefault(unit_id, {"unit_id": unit_id, "total": 0, "correct": 0})
+        unit_id = record.get("section") or record.get("unit") or "unknown"
+        unit = units.setdefault(unit_id, {"unit_id": unit_id, "label": record.get("section"), "total": 0, "correct": 0})
         unit["total"] += 1
         if record.get("error_level") is None:
             unit["correct"] += 1
@@ -238,7 +300,7 @@ def summarize_unit_accuracy(records: list[dict[str, Any]]) -> list[dict[str, Any
         total = unit["total"]
         correct = unit["correct"]
         unit_number = re.search(r"(\d+)$", unit["unit_id"] or "")
-        label = f"第{unit_number.group(1)}单元" if unit_number else unit["unit_id"]
+        label = f"第{unit_number.group(1)}单元" if unit_number else unit.get("label") or unit["unit_id"]
         results.append(
             {
                 "unit_id": unit["unit_id"],
@@ -256,6 +318,7 @@ def build_books(index: dict[str, Any], book_records: dict[str, dict[str, Any]]) 
     for book_id, book_record in book_records.items():
         unit_meta = index.get("units", {}).get(book_id, {})
         history = book_record.get("history", [])
+        enriched_history = enriched_history_records(book_record)
         books.append(
             {
                 "book_id": book_id,
@@ -264,7 +327,8 @@ def build_books(index: dict[str, Any], book_records: dict[str, dict[str, Any]]) 
                 "total": len(history),
                 "recorded_range": book_record.get("recorded_range") or unit_meta.get("recorded_range"),
                 "current_target_score_tier": unit_meta.get("current_target_score_tier"),
-                "summary": summarize_records(history),
+                "score_tiers": score_tiers_for_book(book_id, index),
+                "summary": summarize_records(enriched_history),
             }
         )
     return sorted(books, key=lambda item: (item["status"] != "active", item["label"]))
@@ -362,12 +426,15 @@ def build_dashboard_payload() -> dict[str, Any]:
     for book in build_books(index, book_records):
         abc = abc_indexes.get(book["book_id"], {"units": {}})
         level_counts = {"A": 0, "B": 0, "C": 0}
-        for unit in abc.get("units", {}).values():
-            for level in level_counts:
-                level_counts[level] += len(unit["levels"].get(level, []))
+        if book["book_id"] == "workbook_880":
+            level_counts = book["summary"]["error_levels"]
+        else:
+            for unit in abc.get("units", {}).values():
+                for level in level_counts:
+                    level_counts[level] += len(unit["levels"].get(level, []))
         books.append({**book, "abc_counts": level_counts, "error_total": sum(level_counts.values())})
 
-    all_records = [record for book in book_records.values() for record in book.get("history", [])]
+    all_records = [record for book in book_records.values() for record in enriched_history_records(book)]
     return {
         "version": index.get("version"),
         "records_dir": str(RECORDS_DIR),
@@ -386,6 +453,9 @@ def build_dashboard_payload() -> dict[str, Any]:
 
 
 def build_book_errors(book_id: str) -> dict[str, Any]:
+    if book_id == "workbook_880":
+        return build_structured_book_errors(book_id)
+
     abc = parse_abc_indexes().get(book_id)
     if not abc:
         raise HTTPException(status_code=404, detail="没有找到该题册的 ABC 索引")
@@ -400,7 +470,9 @@ def build_book_errors(book_id: str) -> dict[str, Any]:
                 record = full_records.get(question_id, {})
                 levels[level].append(
                     {
+                        "book_id": book_id,
                         "question_id": question_id,
+                        "display_id": record.get("display_id") or question_id,
                         "level": level,
                         "unit": record.get("unit") or unit["unit_id"],
                         "mastery": record.get("mastery"),
@@ -415,7 +487,68 @@ def build_book_errors(book_id: str) -> dict[str, Any]:
                 )
         units.append({"unit_id": unit["unit_id"], "label": unit["label"], "levels": levels})
 
-    return {"book_id": book_id, "label": display_book_label(book_id), "units": units}
+    return {
+        "book_id": book_id,
+        "label": display_book_label(book_id),
+        "structured": False,
+        "filters": {"sections": [], "question_types": [], "pages": []},
+        "units": units,
+    }
+
+
+def structured_error_item(book_id: str, record: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "book_id": book_id,
+        "question_id": record.get("question_id"),
+        "display_id": record.get("display_id") or record.get("question_id"),
+        "display_label": record.get("display_label"),
+        "level": record.get("error_level"),
+        "unit": record.get("unit"),
+        "section": record.get("section"),
+        "question_type": record.get("question_type"),
+        "page": record.get("page"),
+        "record_order": record.get("record_order"),
+        "card_structure": record.get("card_structure"),
+        "parent_display_id": record.get("parent_display_id"),
+        "subquestion": record.get("subquestion"),
+        "mastery": record.get("mastery"),
+        "performance_level": record.get("performance_level"),
+        "difficulty_level": record.get("difficulty_level"),
+        "target_score_tier": record.get("target_score_tier"),
+        "required_for_scores": record.get("required_for_scores", []),
+        "error_tags": record.get("error_tags", []),
+        "weakness_focus": record.get("weakness_focus", []),
+        "summary": record.get("student_answer_summary", ""),
+    }
+
+
+def build_structured_book_errors(book_id: str) -> dict[str, Any]:
+    book_record = load_book_record(book_id)
+    records = [record for record in enriched_history_records(book_record) if record.get("error_level") in {"A", "B", "C"}]
+    sections = book_record.get("section_schema") or sorted({record.get("section") for record in records if record.get("section")})
+    question_types = book_record.get("question_type_schema") or sorted(
+        {record.get("question_type") for record in records if record.get("question_type")}
+    )
+    pages = sorted({record.get("page") for record in records if record.get("page") is not None})
+    units = []
+    for section in sections:
+        levels: dict[str, list[dict[str, Any]]] = {"A": [], "B": [], "C": []}
+        section_records = sorted(
+            (record for record in records if record.get("section") == section),
+            key=lambda record: (record.get("record_order") or 999999, record.get("question_id") or ""),
+        )
+        for record in section_records:
+            levels[record["error_level"]].append(structured_error_item(book_id, record))
+        if any(levels.values()):
+            units.append({"unit_id": section, "label": section, "levels": levels})
+
+    return {
+        "book_id": book_id,
+        "label": display_book_label(book_id),
+        "structured": True,
+        "filters": {"sections": sections, "question_types": question_types, "pages": pages},
+        "units": units,
+    }
 
 
 def default_review_state() -> dict[str, Any]:
@@ -430,8 +563,16 @@ def load_review_state() -> dict[str, Any]:
     if not REVIEW_STATE_FILE.exists():
         return default_review_state()
     state = read_json(REVIEW_STATE_FILE)
-    settings = {**DEFAULT_REVIEW_SETTINGS, **state.get("settings", {})}
+    stored_settings = state.get("settings", {})
+    settings = {**DEFAULT_REVIEW_SETTINGS, **stored_settings}
     settings["intervals"] = {**DEFAULT_REVIEW_SETTINGS["intervals"], **settings.get("intervals", {})}
+    selected_tiers = normalize_tiers(settings.get("selected_tiers"))
+    if int(stored_settings.get("tier_schema_version", 1)) < 2:
+        for tier in DEFAULT_TIER_OPTIONS_BY_BOOK["workbook_880"]:
+            if tier not in selected_tiers:
+                selected_tiers.append(tier)
+    settings["selected_tiers"] = selected_tiers
+    settings["tier_schema_version"] = 2
     state["settings"] = settings
     state.setdefault("items", {})
     return state
@@ -447,7 +588,7 @@ def default_review_schedule() -> dict[str, Any]:
         "version": "1.0",
         "timezone": "Asia/Shanghai",
         "policy": {
-            "description": "按日期 bucket 持久化复盘计划；每天读取当天题号索引，题目详情回 record 文件查询，未完成的过期 bucket 会顺延到今天。",
+            "description": "按日期 bucket 持久化复盘计划；每天只读取当天题号索引，过期 bucket 直接删除，是否迁移由用户手动决定。",
             "key_format": "book_id:question_id",
         },
         "buckets": {},
@@ -492,7 +633,7 @@ def normalize_schedule_buckets(buckets: dict[str, Any]) -> dict[str, list[str]]:
             if key and key not in keys:
                 keys.append(key)
         if keys:
-            keys.sort(key=lambda item: parse_question_number(question_id_from_schedule_key(item)))
+            keys = sort_schedule_keys(keys)
             normalized[due_at] = keys
     return normalized
 
@@ -517,9 +658,54 @@ def parse_question_number(question_id: str) -> int:
     return int(match.group(1)) if match else 0
 
 
-def normalize_tiers(values: list[int] | None) -> list[int]:
-    selected = values or [90, 110, 135]
-    return [tier for tier in [90, 110, 135] if tier in selected]
+def split_schedule_key(key: str) -> tuple[str, str]:
+    if ":" not in key:
+        return "", key
+    return tuple(key.split(":", 1))
+
+
+def record_sort_order(book_id: str, question_id: str, record: dict[str, Any] | None = None) -> int:
+    if book_id == "workbook_880":
+        return int((record or {}).get("record_order") or 0)
+    return parse_question_number(question_id)
+
+
+def sort_schedule_keys(keys: list[str]) -> list[str]:
+    record_maps: dict[str, dict[str, dict[str, Any]]] = {}
+    for key in keys:
+        book_id, _ = split_schedule_key(key)
+        if not book_id or book_id in record_maps:
+            continue
+        try:
+            record_maps[book_id] = records_by_question(load_book_record(book_id))
+        except HTTPException:
+            record_maps[book_id] = {}
+
+    return sorted(
+        keys,
+        key=lambda key: (
+            split_schedule_key(key)[0],
+            record_sort_order(
+                split_schedule_key(key)[0],
+                split_schedule_key(key)[1],
+                record_maps.get(split_schedule_key(key)[0], {}).get(split_schedule_key(key)[1]),
+            ),
+            split_schedule_key(key)[1],
+        ),
+    )
+
+
+def normalize_tiers(values: list[TierValue] | None, index: dict[str, Any] | None = None) -> list[TierValue]:
+    available = all_review_tiers(index)
+    if not values:
+        return available
+    normalized_values: list[TierValue] = []
+    for value in values:
+        if isinstance(value, str) and value.isdigit():
+            normalized_values.append(int(value))
+        else:
+            normalized_values.append(value)
+    return [tier for tier in available if tier in normalized_values]
 
 
 def date_from_iso(value: str | None) -> date | None:
@@ -533,7 +719,7 @@ def schedule_key(book_id: str, question_id: str) -> str:
 
 
 def question_id_from_schedule_key(key: str) -> str:
-    return key.split(":", 1)[1] if ":" in key else key
+    return split_schedule_key(key)[1]
 
 
 def record_timestamp_date(record: dict[str, Any] | None) -> date | None:
@@ -550,6 +736,22 @@ def record_timestamp_date(record: dict[str, Any] | None) -> date | None:
 
 def full_records_by_question(book_record: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return {record.get("question_id"): record for record in book_record.get("records", []) if record.get("question_id")}
+
+
+def build_record_catalog(book_records: dict[str, dict[str, Any]]) -> dict[str, tuple[str, dict[str, Any]]]:
+    catalog: dict[str, tuple[str, dict[str, Any]]] = {}
+    for book_id, book_record in book_records.items():
+        for question_id, record in records_by_question(book_record).items():
+            catalog[question_id] = (book_id, record)
+    return catalog
+
+
+def resolve_state_item_book_id(
+    question_id: str,
+    item: dict[str, Any],
+    catalog: dict[str, tuple[str, dict[str, Any]]],
+) -> str | None:
+    return item.get("book_id") or (catalog.get(question_id) or (None, {}))[0]
 
 
 def iter_scheduled_entries(schedule: dict[str, Any]):
@@ -584,7 +786,7 @@ def add_schedule_key(schedule: dict[str, Any], due_at: date, key: str, replace: 
     if key in bucket:
         return changed
     bucket.append(key)
-    bucket.sort(key=lambda item: parse_question_number(question_id_from_schedule_key(item)))
+    bucket[:] = sort_schedule_keys(bucket)
     return True
 
 
@@ -596,53 +798,66 @@ def add_daily_plan_keys(schedule: dict[str, Any], target_date: date, keys: list[
             plan.append(key)
             changed = True
     if changed:
-        plan.sort(key=lambda item: parse_question_number(question_id_from_schedule_key(item)))
+        plan[:] = sort_schedule_keys(plan)
     return changed
 
 
-def reviewed_keys_on_date(book_id: str, state: dict[str, Any], target_date: date) -> list[str]:
+def reviewed_keys_on_date(
+    book_records: dict[str, dict[str, Any]],
+    state: dict[str, Any],
+    target_date: date,
+) -> list[str]:
+    catalog = build_record_catalog(book_records)
     keys = []
     for question_id, item in state.get("items", {}).items():
         for event in item.get("history", []):
             if event_review_date(event) == target_date:
-                keys.append(schedule_key(book_id, question_id))
+                book_id = event.get("book_id") or resolve_state_item_book_id(question_id, item, catalog)
+                if book_id:
+                    keys.append(schedule_key(book_id, question_id))
                 break
     return keys
 
 
-def rollover_schedule(schedule: dict[str, Any], today: date) -> bool:
+def discard_overdue_buckets(schedule: dict[str, Any], today: date) -> bool:
     buckets = schedule.setdefault("buckets", {})
     today_key = today.isoformat()
     changed = False
     for due_at in sorted([key for key in buckets if key < today_key]):
-        overdue_keys = buckets.pop(due_at, [])
-        for key in overdue_keys:
-            add_schedule_key(schedule, today, key, replace=True)
-        changed = changed or bool(overdue_keys)
+        changed = bool(buckets.pop(due_at, [])) or changed
     return changed
 
 
-def ensure_review_schedule(book_id: str, book_record: dict[str, Any], state: dict[str, Any], today: date) -> dict[str, Any]:
+def ensure_review_schedule(
+    book_records: dict[str, dict[str, Any]],
+    state: dict[str, Any],
+    today: date,
+) -> dict[str, Any]:
     schedule = load_review_schedule()
-    changed = rollover_schedule(schedule, today)
-    history_records = records_by_question(book_record)
-    full_records = full_records_by_question(book_record)
+    changed = discard_overdue_buckets(schedule, today)
+    for book_id, book_record in book_records.items():
+        history_records = records_by_question(book_record)
+        full_records = full_records_by_question(book_record)
 
-    for question_id, record in history_records.items():
-        if not record.get("error_level"):
-            continue
-        key = schedule_key(book_id, question_id)
-        state_item = state.get("items", {}).get(question_id, {})
-        next_due = date_from_iso(state_item.get("next_due_at"))
-        if next_due:
-            changed = add_schedule_key(schedule, next_due, key, replace=True) or changed
-        elif key not in scheduled_keys(schedule):
-            recorded_date = record_timestamp_date(full_records.get(question_id)) or today
-            due_at = recorded_date + timedelta(days=1)
-            changed = add_schedule_key(schedule, due_at, key, replace=False) or changed
+        for question_id, record in history_records.items():
+            if not record.get("error_level"):
+                continue
+            key = schedule_key(book_id, question_id)
+            state_item = state.get("items", {}).get(question_id, {})
+            next_due = date_from_iso(state_item.get("next_due_at"))
+            if next_due and next_due >= today:
+                changed = add_schedule_key(schedule, next_due, key, replace=True) or changed
+            elif key not in scheduled_keys(schedule):
+                if next_due:
+                    continue
+                recorded_date = record_timestamp_date(full_records.get(question_id)) or today
+                due_at = recorded_date + timedelta(days=1)
+                if due_at < today:
+                    continue
+                changed = add_schedule_key(schedule, due_at, key, replace=False) or changed
 
     today_keys = schedule_entries_for_date(schedule, today)
-    reviewed_today_keys = reviewed_keys_on_date(book_id, state, today)
+    reviewed_today_keys = reviewed_keys_on_date(book_records, state, today)
     changed = add_daily_plan_keys(schedule, today, [*today_keys, *reviewed_today_keys]) or changed
 
     if changed:
@@ -659,6 +874,7 @@ def schedule_plan_for_date(schedule: dict[str, Any], target_date: date) -> list[
 
 
 def review_item_from_record(
+    book_id: str,
     record: dict[str, Any],
     state: dict[str, Any],
     today: date,
@@ -680,9 +896,22 @@ def review_item_from_record(
     fail_count = 1 + review_fail_count
     recent_fail_count = sum(1 for event in history[-5:] if event.get("outcome") != "pass")
     overdue_days = max((today - next_due).days, 0)
+    recorded_date = record_timestamp_date(record)
+    sort_order = record_sort_order(book_id, question_id, record)
 
     return {
+        "book_id": book_id,
+        "book_label": display_book_label(book_id),
         "question_id": question_id,
+        "display_id": record.get("display_id") or question_id,
+        "display_label": record.get("display_label"),
+        "page": record.get("page"),
+        "section": record.get("section"),
+        "question_type": record.get("question_type"),
+        "record_order": record.get("record_order"),
+        "card_structure": record.get("card_structure"),
+        "parent_display_id": record.get("parent_display_id"),
+        "subquestion": record.get("subquestion"),
         "level": level,
         "original_level": base_level,
         "target_score_tier": record.get("target_score_tier"),
@@ -702,14 +931,21 @@ def review_item_from_record(
         "is_due": next_due <= today,
         "is_new": not history,
         "question_number": parse_question_number(question_id),
+        "sort_order": sort_order,
+        "recorded_ordinal": recorded_date.toordinal() if recorded_date else 0,
     }
 
 
 def review_sort_key(item: dict[str, Any]) -> tuple:
-    tier_rank = {90: 0, 110: 1, 135: 2}.get(item.get("target_score_tier"), 9)
+    tier_ranks = {
+        "workbook_660": {90: 0, 110: 1, 135: 2},
+        "workbook_880": {"120以下": 0, "120+": 1},
+    }
+    tier_rank = tier_ranks.get(item.get("book_id"), {}).get(item.get("target_score_tier"), 9)
     level_rank = {"A": 0, "B": 1, "C": 2}.get(item.get("level"), 9)
     return (
-        -item.get("question_number", 0),
+        -item.get("recorded_ordinal", 0),
+        -item.get("sort_order", 0),
         tier_rank,
         -item.get("recent_fail_count", 0),
         tier_rank,
@@ -728,63 +964,81 @@ def reviewed_on(item: dict[str, Any], target_date: date) -> bool:
 
 
 def build_review_payload(
-    book_id: str = "workbook_660",
-    selected_tiers: list[int] | None = None,
+    selected_tiers: list[TierValue] | None = None,
     daily_limit: int | None = None,
 ) -> dict[str, Any]:
+    index = load_index()
     state = load_review_state()
     settings = state["settings"]
-    selected_tiers = normalize_tiers(selected_tiers or settings.get("selected_tiers"))
+    selected_tiers = normalize_tiers(selected_tiers or settings.get("selected_tiers"), index)
     daily_limit = daily_limit or int(settings.get("daily_limit", 10))
     today = date.today()
-    book_record = load_book_record(book_id)
-    schedule = ensure_review_schedule(book_id, book_record, state, today)
+    book_records = load_reviewable_book_records(index)
+    schedule = ensure_review_schedule(book_records, state, today)
     scheduled_today = schedule_entries_for_date(schedule, today)
-    scheduled_question_ids = [question_id_from_schedule_key(key) for key in scheduled_today]
-    scheduled_question_ids = [question_id for question_id in scheduled_question_ids if question_id]
     planned_today = schedule_plan_for_date(schedule, today)
-    planned_question_ids = [question_id_from_schedule_key(key) for key in planned_today]
-    planned_question_ids = [question_id for question_id in planned_question_ids if question_id]
 
-    candidates = []
-    records = records_by_question(book_record)
-    for question_id in scheduled_question_ids:
-        record = records.get(question_id)
-        if not record:
-            continue
-        item = review_item_from_record(record, state, today, scheduled_due=today)
+    history_maps = {book_id: records_by_question(record) for book_id, record in book_records.items()}
+    full_maps = {book_id: full_records_by_question(record) for book_id, record in book_records.items()}
+
+    def item_for_key(key: str) -> dict[str, Any] | None:
+        book_id, question_id = split_schedule_key(key)
+        if book_id not in book_records or not question_id:
+            return None
+        history_record = history_maps[book_id].get(question_id)
+        if not history_record:
+            return None
+        record = {**history_record, **full_maps[book_id].get(question_id, {})}
+        item = review_item_from_record(book_id, record, state, today, scheduled_due=today)
         if item and item.get("target_score_tier") in selected_tiers:
-            item["state_history"] = state.get("items", {}).get(item["question_id"], {}).get("history", [])
-            candidates.append(item)
+            item["schedule_key"] = key
+            item["state_history"] = state.get("items", {}).get(question_id, {}).get("history", [])
+            return item
+        return None
+
+    candidates = [item for key in scheduled_today if (item := item_for_key(key))]
 
     due_items = candidates
-    planned_items_by_id = {}
-    for question_id in planned_question_ids:
-        record = records.get(question_id)
-        if not record:
-            continue
-        item = review_item_from_record(record, state, today, scheduled_due=today)
-        if item and item.get("target_score_tier") in selected_tiers:
-            planned_items_by_id[item["question_id"]] = item
-    planned_items = list(planned_items_by_id.values())
+    planned_items_by_key = {item["schedule_key"]: item for key in planned_today if (item := item_for_key(key))}
+    planned_items = list(planned_items_by_key.values())
 
     due_items.sort(key=review_sort_key)
     selected = due_items[:daily_limit]
     deferred = due_items[daily_limit:]
-    tier_counts = {
-        str(tier): sum(1 for item in planned_items if item.get("target_score_tier") == tier)
-        for tier in [90, 110, 135]
-    }
+
+    book_counts = {}
+    for group in tier_groups(index):
+        book_id = group["book_id"]
+        book_planned = [item for item in planned_items if item["book_id"] == book_id]
+        book_due = [item for item in due_items if item["book_id"] == book_id]
+        book_selected = [item for item in selected if item["book_id"] == book_id]
+        book_deferred = [item for item in deferred if item["book_id"] == book_id]
+        book_counts[book_id] = {
+            "label": group["label"],
+            "due_total": len(book_planned),
+            "pending_total": len(book_due),
+            "selected_total": len(book_selected),
+            "deferred_total": len(book_deferred),
+            "tier_counts": {
+                str(tier): sum(1 for item in book_planned if item.get("target_score_tier") == tier)
+                for tier in group["tiers"]
+            },
+        }
+
     for item in candidates:
+        item.pop("state_history", None)
+    for item in planned_items:
         item.pop("state_history", None)
 
     return {
-        "book_id": book_id,
-        "label": display_book_label(book_id),
+        "book_id": "all",
+        "label": " + ".join(display_book_label(book_id) for book_id in book_records),
+        "book_ids": list(book_records),
         "today": today.isoformat(),
         "settings": {
             "daily_limit": daily_limit,
             "selected_tiers": selected_tiers,
+            "tier_groups": tier_groups(index),
             "first_pass_interval": int(settings.get("first_pass_interval", DEFAULT_REVIEW_SETTINGS["first_pass_interval"])),
             "intervals": settings.get("intervals", DEFAULT_REVIEW_SETTINGS["intervals"]),
         },
@@ -794,7 +1048,7 @@ def build_review_payload(
             "selected_total": len(selected),
             "deferred_total": len(deferred),
             "overflow_total": max(len(planned_items) - daily_limit, 0),
-            "tier_counts": tier_counts,
+            "book_counts": book_counts,
         },
         "activity": build_activity(state),
         "schedule_file": str(REVIEW_SCHEDULE_FILE),
@@ -854,18 +1108,36 @@ def build_activity(state: dict[str, Any], days: int = 112) -> list[dict[str, Any
 
 def flatten_review_history(state: dict[str, Any], limit: int = 40) -> list[dict[str, Any]]:
     events = []
-    records = records_by_question(load_book_record(state["settings"].get("active_workbook", "workbook_660")))
+    index = load_index()
+    book_records = load_all_book_records(index)
+    catalog = build_record_catalog(book_records)
+    full_maps = {book_id: full_records_by_question(record) for book_id, record in book_records.items()}
     for question_id, item in state.get("items", {}).items():
-        record = records.get(question_id, {})
+        book_id = resolve_state_item_book_id(question_id, item, catalog)
+        if not book_id:
+            continue
+        history_record = (catalog.get(question_id) or (book_id, {}))[1]
+        record = {**history_record, **full_maps.get(book_id, {}).get(question_id, {})}
         cumulative_fail_count = 1 if record.get("error_level") else 0
-        for index, event in enumerate(item.get("history", [])):
+        for event_index, event in enumerate(item.get("history", [])):
             if event.get("outcome") != "pass":
                 cumulative_fail_count += 1
             events.append(
                 {
+                    "book_id": event.get("book_id") or book_id,
+                    "book_label": display_book_label(book_id),
                     "question_id": question_id,
-                    "event_index": index,
-                    "review_count": index + 1,
+                    "display_id": record.get("display_id") or question_id,
+                    "display_label": record.get("display_label"),
+                    "page": record.get("page"),
+                    "section": record.get("section"),
+                    "question_type": record.get("question_type"),
+                    "record_order": record.get("record_order"),
+                    "card_structure": record.get("card_structure"),
+                    "parent_display_id": record.get("parent_display_id"),
+                    "subquestion": record.get("subquestion"),
+                    "event_index": event_index,
+                    "review_count": event_index + 1,
                     "fail_count": cumulative_fail_count,
                     "target_score_tier": record.get("target_score_tier"),
                     "required_for_scores": record.get("required_for_scores", []),
@@ -884,10 +1156,10 @@ def count_review_events(state: dict[str, Any]) -> int:
     return sum(len(item.get("history", [])) for item in state.get("items", {}).values())
 
 
-def recalculate_review_item(question_id: str, item: dict[str, Any], state: dict[str, Any]) -> None:
+def recalculate_review_item(book_id: str, question_id: str, item: dict[str, Any], state: dict[str, Any]) -> None:
     intervals = state["settings"].get("intervals", DEFAULT_REVIEW_SETTINGS["intervals"])
     first_pass_interval = int(state["settings"].get("first_pass_interval", DEFAULT_REVIEW_SETTINGS["first_pass_interval"]))
-    record = records_by_question(load_book_record(state["settings"].get("active_workbook", "workbook_660"))).get(question_id, {})
+    record = records_by_question(load_book_record(book_id)).get(question_id, {})
     current_level = item.get("error_level") or record.get("error_level") or "B"
     interval_index = -1
     last_reviewed = None
@@ -939,15 +1211,22 @@ def update_review_feedback(payload: ReviewFeedbackRequest) -> dict[str, Any]:
     settings = state["settings"]
     intervals = settings.get("intervals", DEFAULT_REVIEW_SETTINGS["intervals"])
     first_pass_interval = int(settings.get("first_pass_interval", DEFAULT_REVIEW_SETTINGS["first_pass_interval"]))
+    if payload.book_id not in reviewable_book_ids():
+        raise HTTPException(status_code=422, detail="该题册当前不参与回滚复习")
+    record = records_by_question(load_book_record(payload.book_id)).get(payload.question_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="没有在指定题册中找到该题")
     items = state.setdefault("items", {})
     current = items.setdefault(payload.question_id, {"history": [], "interval_index": -1})
+    existing_book_id = current.get("book_id")
+    if existing_book_id and existing_book_id != payload.book_id:
+        raise HTTPException(status_code=409, detail="该题的复盘状态属于另一题册")
 
     if payload.outcome == "wrong" and not payload.error_level:
         raise HTTPException(status_code=422, detail="做错时必须提供 A/B/C 等级")
 
     current_level = payload.error_level or current.get("error_level")
     if not current_level:
-        record = records_by_question(load_book_record(settings.get("active_workbook", "workbook_660"))).get(payload.question_id, {})
         current_level = record.get("error_level") or "B"
 
     next_index, interval_days = next_interval_for(
@@ -960,12 +1239,14 @@ def update_review_feedback(payload: ReviewFeedbackRequest) -> dict[str, Any]:
     next_due = today + timedelta(days=interval_days)
 
     event = {
+        "book_id": payload.book_id,
         "reviewed_at": datetime.now().isoformat(timespec="seconds"),
         "outcome": payload.outcome,
         "error_level": payload.error_level,
         "note": payload.note or "",
         "next_due_at": next_due.isoformat(),
     }
+    current["book_id"] = payload.book_id
     current["error_level"] = current_level
     current["interval_index"] = next_index
     current["last_reviewed_at"] = today.isoformat()
@@ -974,13 +1255,14 @@ def update_review_feedback(payload: ReviewFeedbackRequest) -> dict[str, Any]:
     items[payload.question_id] = current
     save_review_state(state)
     sync_schedule_for_question(
-        settings.get("active_workbook", "workbook_660"),
+        payload.book_id,
         payload.question_id,
         current_level,
         next_due,
     )
 
     return {
+        "book_id": payload.book_id,
         "question_id": payload.question_id,
         "outcome": payload.outcome,
         "error_level": current_level,
@@ -999,21 +1281,30 @@ def update_review_event(question_id: str, event_index: int, payload: ReviewEvent
         raise HTTPException(status_code=404, detail="没有找到该条复盘记录")
     if payload.outcome == "wrong" and not payload.error_level:
         raise HTTPException(status_code=422, detail="做错时必须提供 A/B/C 等级")
+    record = records_by_question(load_book_record(payload.book_id)).get(question_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="没有在指定题册中找到该题")
+    existing_book_id = item.get("book_id")
+    if existing_book_id and existing_book_id != payload.book_id:
+        raise HTTPException(status_code=409, detail="该题的复盘状态属于另一题册")
 
     event = history[event_index]
+    event["book_id"] = payload.book_id
     event["outcome"] = payload.outcome
     event["error_level"] = payload.error_level
     event["note"] = payload.note or ""
-    recalculate_review_item(question_id, item, state)
+    item["book_id"] = payload.book_id
+    recalculate_review_item(payload.book_id, question_id, item, state)
     save_review_state(state)
     if item.get("next_due_at"):
         sync_schedule_for_question(
-            state["settings"].get("active_workbook", "workbook_660"),
+            payload.book_id,
             question_id,
             item.get("error_level") or payload.error_level,
             date_from_iso(item.get("next_due_at")),
         )
     return {
+        "book_id": payload.book_id,
         "question_id": question_id,
         "event_index": event_index,
         "event": history[event_index],
@@ -1044,12 +1335,13 @@ async def api_book_errors(book_id: str):
 
 @app.get("/api/review/today")
 async def api_review_today(
-    book_id: str = "workbook_660",
     tiers: str | None = Query(default=None),
     limit: int | None = Query(default=None, ge=1, le=200),
 ):
-    selected_tiers = [int(value) for value in tiers.split(",")] if tiers else None
-    return JSONResponse(content=build_review_payload(book_id, selected_tiers, limit))
+    selected_tiers: list[TierValue] | None = None
+    if tiers:
+        selected_tiers = [int(value) if value.isdigit() else value for value in tiers.split(",") if value]
+    return JSONResponse(content=build_review_payload(selected_tiers, limit))
 
 
 @app.post("/api/review/settings")
@@ -1057,6 +1349,7 @@ async def api_review_settings(payload: ReviewSettingsRequest):
     state = load_review_state()
     state["settings"]["daily_limit"] = payload.daily_limit
     state["settings"]["selected_tiers"] = normalize_tiers(payload.selected_tiers)
+    state["settings"]["tier_schema_version"] = 2
     save_review_state(state)
     return JSONResponse(content={"settings": state["settings"]})
 

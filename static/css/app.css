@@ -418,6 +418,30 @@ textarea:focus {
   flex-wrap: wrap;
 }
 
+.error-filter-bar {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(130px, 190px));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.error-filter-bar[hidden] {
+  display: none;
+}
+
+.error-filter-bar label {
+  display: grid;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.error-filter-bar select {
+  min-height: 38px;
+  padding: 7px 10px;
+}
+
 .tab {
   text-align: center;
 }
@@ -437,6 +461,35 @@ textarea:focus {
   grid-template-columns: 90px 1fr auto;
   gap: 12px;
   align-items: start;
+}
+
+.error-card-structured {
+  grid-template-columns: 104px minmax(0, 1fr) auto;
+}
+
+.structured-card-tags {
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.question-context {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 5px;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.question-context i {
+  color: #a4afab;
+  font-style: normal;
+  font-weight: 500;
 }
 
 .question-id {
@@ -485,6 +538,13 @@ textarea:focus {
   grid-template-columns: 130px minmax(220px, 1fr) auto;
   gap: 12px;
   align-items: end;
+}
+
+.tier-filter-groups {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  min-width: 0;
 }
 
 .review-controls label,
@@ -556,9 +616,34 @@ textarea:focus {
 
 .tier-ledger {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
   margin-top: 10px;
+}
+
+.tier-ledger-book {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+
+.tier-ledger-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.tier-ledger-label strong {
+  color: var(--ink);
+}
+
+.tier-ledger-cells {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
+  gap: 8px;
 }
 
 .rule-list {
@@ -708,6 +793,17 @@ textarea:focus {
   background: var(--surface-2);
   color: var(--muted);
   font-size: 12px;
+}
+
+.review-line .book-source-tag,
+.history-main .book-source-tag {
+  background: #e3efeb;
+  color: var(--green);
+  font-weight: 750;
+}
+
+.review-question-context {
+  margin: 0 0 7px;
 }
 
 .feedback-row {
@@ -885,6 +981,11 @@ textarea:focus {
   background: var(--blue-soft);
 }
 
+.history-question-context {
+  flex-basis: 100%;
+  margin: 0;
+}
+
 .history-edit {
   display: grid;
   grid-template-columns: 92px 86px minmax(180px, 1fr) auto;
@@ -951,6 +1052,10 @@ textarea:focus {
     grid-template-columns: 1fr;
   }
 
+  .tier-filter-groups {
+    grid-template-columns: 1fr 1fr;
+  }
+
   .history-card {
     grid-template-columns: 1fr;
   }
@@ -978,6 +1083,11 @@ textarea:focus {
   }
 
   .error-card {
+    grid-template-columns: 1fr;
+  }
+
+  .error-filter-bar,
+  .tier-filter-groups {
     grid-template-columns: 1fr;
   }
 

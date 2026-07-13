@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>数学错题工作台</title>
-  <link rel="stylesheet" href="/static/css/app.css?v=20260702-review-responsive">
+  <link rel="stylesheet" href="/static/css/app.css?v=20260712-workbook-880">
 </head>
 <body>
   <div class="shell">
@@ -63,7 +63,7 @@
           <section class="panel">
             <div class="panel-head">
               <h3>ABC 分布</h3>
-              <span>以 MD 索引为准</span>
+              <span id="abcSourceMeta">以 MD 索引为准</span>
             </div>
             <div class="abc-chart" id="abcChart"></div>
           </section>
@@ -109,7 +109,7 @@
           <section class="panel control-panel">
             <div class="panel-head">
               <h3>今日回滚</h3>
-              <span>机械间隔 · 660</span>
+              <span>机械间隔 · 660 + 880</span>
             </div>
 
             <div class="review-controls">
@@ -117,12 +117,7 @@
                 每日上限
                 <input id="dailyLimit" type="number" min="1" max="200" value="10">
               </label>
-              <fieldset class="tier-fieldset">
-                <legend>目标分层</legend>
-                <label><input type="checkbox" name="tier" value="90" checked> 90</label>
-                <label><input type="checkbox" name="tier" value="110" checked> 110</label>
-                <label><input type="checkbox" name="tier" value="135" checked> 135</label>
-              </fieldset>
+              <div class="tier-filter-groups" id="reviewTierFilters" aria-label="按题册选择目标分层"></div>
               <button class="primary-action compact" id="refreshReview" type="button">刷新队列</button>
             </div>
 
@@ -155,6 +150,7 @@
               <span>失败多优先</span>
               <span>逾期优先</span>
               <span>90 > 110 > 135</span>
+              <span>120以下 > 120+</span>
               <span>A > B > C</span>
             </div>
           </section>
@@ -191,8 +187,9 @@
         <section class="panel">
           <div class="panel-head">
             <h3>错题记录</h3>
-            <span>按单元与 ABC 分级查看</span>
+            <span id="errorViewMeta">按单元与 ABC 分级查看</span>
           </div>
+          <div class="error-filter-bar" id="errorFilters" hidden></div>
           <div class="level-tabs" id="levelTabs">
             <button class="tab active" data-level="all">全部</button>
             <button class="tab" data-level="A">A 级</button>
@@ -206,6 +203,6 @@
     </main>
   </div>
 
-  <script src="/static/js/app.js?v=20260702-dashboard-cleanup"></script>
+  <script src="/static/js/app.js?v=20260712-workbook-880"></script>
 </body>
 </html>

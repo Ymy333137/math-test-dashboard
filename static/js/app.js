@@ -4,7 +4,8 @@ const state = {
   review: null,
   reviewHistory: null,
   activeBook: "workbook_660",
-  activeLevel: "all"
+  activeLevel: "all",
+  errorFilters: { section: "all", questionType: "all", page: "all" }
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -31,6 +32,7 @@ async function fetchJson(url, options) {
 async function init() {
   bindNavigation();
   bindLevelTabs();
+  bindErrorFilters();
   bindReviewControls();
   await loadDashboard();
   await loadBookErrors(state.activeBook);
@@ -58,6 +60,15 @@ function bindLevelTabs() {
     state.activeLevel = button.dataset.level;
     $$("#levelTabs .tab").forEach((item) => item.classList.remove("active"));
     button.classList.add("active");
+    renderErrors();
+  });
+}
+
+function bindErrorFilters() {
+  $("#errorFilters").addEventListener("change", (event) => {
+    const select = event.target.closest("select[data-filter]");
+    if (!select) return;
+    state.errorFilters[select.dataset.filter] = select.value;
     renderErrors();
   });
 }
@@ -99,6 +110,9 @@ function renderBookSelect() {
   select.value = state.activeBook;
   select.addEventListener("change", async () => {
     state.activeBook = select.value;
+    state.activeLevel = "all";
+    state.errorFilters = { section: "all", questionType: "all", page: "all" };
+    $$("#levelTabs .tab").forEach((item) => item.classList.toggle("active", item.dataset.level === "all"));
     renderOverview();
     await loadBookErrors(state.activeBook);
   });
@@ -119,16 +133,21 @@ function renderOverview() {
   $("#errorTotal").textContent = errorTotal;
   $("#avgMastery").textContent = formatPercent(book.summary.average_mastery);
   $("#bookMeta").textContent = `${book.total} 条 · ${book.status || "unknown"} · ${book.recorded_range || ""}`;
+  $("#abcSourceMeta").textContent = book.book_id === "workbook_880" ? "以 record 字段为准" : "以 MD 索引为准";
 
   renderAbcChart(counts);
   renderUnitAccuracy(book.summary.unit_accuracy || []);
   renderRankList("#errorTags", book.summary.error_tags || []);
-  renderRankList("#weaknessFocus", tierRankItems(book.summary.target_tiers || {}));
+  renderRankList("#weaknessFocus", tierRankItems(book.summary.target_tiers || {}, book.score_tiers || []));
   renderCoverage();
 }
 
-function tierRankItems(tiers) {
-  return ["90", "110", "135"].map((tier) => ({ name: `${tier} 分必做`, count: tiers[tier] || 0 }));
+function tierRankItems(tiers, tierOptions) {
+  return tierOptions.map((tier) => ({ name: formatTierLabel(tier), count: tiers[String(tier)] || 0 }));
+}
+
+function formatTierLabel(tier) {
+  return typeof tier === "number" || /^\d+$/.test(String(tier)) ? `${tier} 分必做` : String(tier);
 }
 
 function renderAbcChart(counts) {
@@ -252,10 +271,44 @@ function renderCoverage() {
 async function loadBookErrors(bookId) {
   try {
     state.errors = await fetchJson(`/api/books/${encodeURIComponent(bookId)}/errors`);
+    renderErrorFilters();
     renderErrors();
   } catch (error) {
+    $("#errorFilters").hidden = true;
     $("#errorList").innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
   }
+}
+
+function renderErrorFilters() {
+  const payload = state.errors;
+  const container = $("#errorFilters");
+  const structured = Boolean(payload?.structured);
+  container.hidden = !structured;
+  $("#errorViewMeta").textContent = structured ? "按板块、题型、ABC 与页码查看" : "按单元与 ABC 分级查看";
+  if (!structured) {
+    container.innerHTML = "";
+    return;
+  }
+
+  const filters = payload.filters || {};
+  container.innerHTML = `
+    ${renderErrorFilterSelect("section", "板块", filters.sections || [], state.errorFilters.section)}
+    ${renderErrorFilterSelect("questionType", "题型", filters.question_types || [], state.errorFilters.questionType)}
+    ${renderErrorFilterSelect("page", "页码", filters.pages || [], state.errorFilters.page, (value) => `P${value}`)}
+  `;
+}
+
+function renderErrorFilterSelect(filter, label, options, selected, formatter = String) {
+  return `
+    <label>${label}
+      <select data-filter="${filter}">
+        <option value="all">全部</option>
+        ${options.map((option) => `
+          <option value="${escapeHtml(option)}" ${String(selected) === String(option) ? "selected" : ""}>${escapeHtml(formatter(option))}</option>
+        `).join("")}
+      </select>
+    </label>
+  `;
 }
 
 function renderErrors() {
@@ -270,7 +323,10 @@ function renderErrors() {
     const cards = [];
     ["A", "B", "C"].forEach((level) => {
       if (state.activeLevel !== "all" && state.activeLevel !== level) return;
-      (unit.levels[level] || []).forEach((item) => cards.push(renderErrorCard(item)));
+      (unit.levels[level] || []).forEach((item) => {
+        if (!matchesErrorFilters(item)) return;
+        cards.push(renderErrorCard(item));
+      });
     });
     if (cards.length) {
       html += `<div class="unit-block"><h4 class="unit-title">${escapeHtml(unit.label)}</h4>${cards.join("")}</div>`;
@@ -279,8 +335,18 @@ function renderErrors() {
   container.innerHTML = html || '<div class="empty">当前筛选没有错题</div>';
 }
 
+function matchesErrorFilters(item) {
+  if (!state.errors?.structured) return true;
+  const { section, questionType, page } = state.errorFilters;
+  return (section === "all" || item.section === section)
+    && (questionType === "all" || item.question_type === questionType)
+    && (page === "all" || String(item.page) === String(page));
+}
+
 function renderErrorCard(item) {
-  const tags = [item.target_score_tier ? `${item.target_score_tier}分必做` : "", ...(item.required_for_scores || []).map((score) => `${score}`)]
+  if (item.book_id === "workbook_880") return renderStructuredErrorCard(item);
+
+  const tags = [item.target_score_tier ? formatTierLabel(item.target_score_tier) : "", ...(item.required_for_scores || []).map((score) => `${score}`)]
     .filter(Boolean)
     .slice(0, 5);
   return `
@@ -299,20 +365,43 @@ function renderErrorCard(item) {
   `;
 }
 
+function renderStructuredErrorCard(item) {
+  const context = [item.section, item.question_type, item.display_id].filter(Boolean);
+  return `
+    <article class="error-card error-card-structured" data-question-id="${escapeHtml(item.question_id)}">
+      <div>
+        <div class="question-id">${escapeHtml(item.display_id)}</div>
+        <span class="level-badge level-${item.level}">${item.level} 级</span>
+      </div>
+      <div>
+        <div class="question-context">${context.map((value) => `<span>${escapeHtml(value)}</span>`).join('<i aria-hidden="true">/</i>')}</div>
+        <strong>${escapeHtml(item.performance_level || "未记录")} · ${formatPercent(item.mastery)}</strong>
+        <p>${escapeHtml(item.summary || "暂无错因摘要")}</p>
+      </div>
+      <div class="structured-card-tags">
+        <span class="tag">${escapeHtml(formatTierLabel(item.target_score_tier))}</span>
+        <span class="tag">P${escapeHtml(item.page)}</span>
+      </div>
+    </article>
+  `;
+}
+
 function bindReviewControls() {
   $("#refreshReview").addEventListener("click", saveReviewSettingsAndLoad);
   $("#dailyLimit").addEventListener("change", saveReviewSettingsAndLoad);
-  $$("input[name='tier']").forEach((input) => input.addEventListener("change", saveReviewSettingsAndLoad));
+  $("#reviewTierFilters").addEventListener("change", (event) => {
+    if (event.target.matches("input[name='tier']")) saveReviewSettingsAndLoad();
+  });
 }
 
 function selectedTiers() {
-  return $$("input[name='tier']:checked").map((input) => input.value);
+  return $$("input[name='tier']:checked").map((input) => input.dataset.type === "number" ? Number(input.value) : input.value);
 }
 
 async function loadReview() {
-  const tiers = selectedTiers();
   const limit = Number($("#dailyLimit").value || 10);
-  const query = new URLSearchParams({ tiers: tiers.join(","), limit: String(limit) });
+  const query = new URLSearchParams({ limit: String(limit) });
+  if (state.review) query.set("tiers", selectedTiers().join(","));
   state.review = await fetchJson(`/api/review/today?${query.toString()}`);
   renderReview();
   await loadReviewHistory();
@@ -324,7 +413,7 @@ async function saveReviewSettingsAndLoad() {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       daily_limit: Number($("#dailyLimit").value || 10),
-      selected_tiers: selectedTiers().map(Number)
+      selected_tiers: selectedTiers()
     })
   });
   await loadReview();
@@ -334,19 +423,12 @@ function renderReview() {
   const review = state.review;
   if (!review) return;
   $("#dailyLimit").value = review.settings.daily_limit;
-  $$("input[name='tier']").forEach((input) => {
-    input.checked = review.settings.selected_tiers.includes(Number(input.value));
-  });
+  renderReviewTierFilters(review.settings.tier_groups || [], review.settings.selected_tiers || []);
   $("#reviewDue").textContent = review.summary.due_total;
   $("#reviewSelected").textContent = review.summary.pending_total ?? review.summary.selected_total;
   $("#reviewOverflow").textContent = review.summary.overflow_total;
   $("#reviewTodayMeta").textContent = `${review.today} · ${review.label}`;
-  $("#reviewTierCounts").innerHTML = ["90", "110", "135"].map((tier) => `
-    <div class="tier-cell">
-      <span>${tier} 分</span>
-      <strong>${review.summary.tier_counts[tier] || 0}</strong>
-    </div>
-  `).join("");
+  renderReviewTierCounts(review.summary.book_counts || {}, review.settings.tier_groups || []);
   renderActivity(review.activity || []);
   $("#reviewQueue").innerHTML = review.queue.length
     ? review.queue.map((item) => renderReviewCard(item, true)).join("")
@@ -357,24 +439,68 @@ function renderReview() {
   bindFeedbackButtons();
 }
 
+function renderReviewTierFilters(groups, selectedTiers) {
+  $("#reviewTierFilters").innerHTML = groups.map((group) => `
+    <fieldset class="tier-fieldset">
+      <legend>${escapeHtml(group.label)}</legend>
+      ${group.tiers.map((tier) => `
+        <label>
+          <input type="checkbox" name="tier" value="${escapeHtml(tier)}"
+            data-type="${typeof tier === "number" ? "number" : "string"}"
+            ${selectedTiers.includes(tier) ? "checked" : ""}>
+          ${escapeHtml(formatTierLabel(tier))}
+        </label>
+      `).join("")}
+    </fieldset>
+  `).join("");
+}
+
+function renderReviewTierCounts(bookCounts, groups) {
+  $("#reviewTierCounts").innerHTML = groups.map((group) => {
+    const counts = bookCounts[group.book_id]?.tier_counts || {};
+    return `
+      <section class="tier-ledger-book">
+        <div class="tier-ledger-label">
+          <strong>${escapeHtml(group.label)}</strong>
+          <span>应复盘 ${bookCounts[group.book_id]?.due_total || 0}</span>
+        </div>
+        <div class="tier-ledger-cells">
+          ${group.tiers.map((tier) => `
+            <div class="tier-cell">
+              <span>${escapeHtml(formatTierLabel(tier))}</span>
+              <strong>${counts[String(tier)] || 0}</strong>
+            </div>
+          `).join("")}
+        </div>
+      </section>
+    `;
+  }).join("");
+}
+
 function renderReviewCard(item, withActions) {
   const summary = item.summary || "暂无摘要";
+  const visibleId = item.book_id === "workbook_880" ? item.display_id : item.question_id;
+  const context = item.book_id === "workbook_880"
+    ? `<div class="question-context review-question-context">${[item.section, item.question_type, item.display_id].filter(Boolean).map((value) => `<span>${escapeHtml(value)}</span>`).join('<i aria-hidden="true">/</i>')}</div>`
+    : "";
   return `
     <article class="review-card review-level-${item.level}">
       <div class="review-stamp">
-        <strong>${escapeHtml(item.question_id)}</strong>
+        <strong>${escapeHtml(visibleId)}</strong>
         <span class="level-badge level-${item.level}">${item.level}</span>
       </div>
       <div class="review-body">
+        ${context}
         <div class="review-line">
-          <span>${item.target_score_tier} 分必做</span>
+          <span class="book-source-tag">${escapeHtml(item.book_label)}</span>
+          <span>${escapeHtml(formatTierLabel(item.target_score_tier))}</span>
           <span>${item.is_new ? "新错题" : `复习 ${item.review_count} 次`}</span>
           <span>${item.overdue_days ? `逾期 ${item.overdue_days} 天` : "今日到期"}</span>
           <span>失败 ${item.fail_count} 次</span>
         </div>
         <p>${escapeHtml(summary)}</p>
         ${withActions ? `
-          <div class="feedback-row" data-qid="${escapeHtml(item.question_id)}">
+          <div class="feedback-row" data-book-id="${escapeHtml(item.book_id)}" data-qid="${escapeHtml(item.question_id)}">
             <input class="review-note-input" type="text" placeholder="做题 comment，可留空">
             <button class="feedback-pass" data-outcome="pass">对了</button>
             <button class="feedback-a" data-outcome="wrong" data-level="A">仍错 A</button>
@@ -456,18 +582,24 @@ function groupHistoryByDate(history) {
 
 function renderHistoryCard(event) {
   const levelClass = event.error_level ? `history-level-${event.error_level}` : "history-level-pass";
-  const tierTag = event.target_score_tier ? `<span class="history-tier">${event.target_score_tier} 分必做</span>` : "";
+  const tierTag = event.target_score_tier ? `<span class="history-tier">${escapeHtml(formatTierLabel(event.target_score_tier))}</span>` : "";
   const reviewTag = Number.isFinite(event.review_count) ? `<span>复习 ${event.review_count} 次</span>` : "";
   const failTag = Number.isFinite(event.fail_count) ? `<span>失败 ${event.fail_count} 次</span>` : "";
+  const visibleId = event.book_id === "workbook_880" ? event.display_id : event.question_id;
+  const context = event.book_id === "workbook_880"
+    ? `<div class="question-context history-question-context">${[event.section, event.question_type, event.display_id].filter(Boolean).map((value) => `<span>${escapeHtml(value)}</span>`).join('<i aria-hidden="true">/</i>')}</div>`
+    : "";
   return `
-    <article class="history-card ${levelClass}" data-qid="${escapeHtml(event.question_id)}" data-index="${event.event_index}">
+    <article class="history-card ${levelClass}" data-book-id="${escapeHtml(event.book_id)}" data-qid="${escapeHtml(event.question_id)}" data-index="${event.event_index}">
       <div class="history-main">
-        <strong>${escapeHtml(event.question_id)}</strong>
+        <strong>${escapeHtml(visibleId)}</strong>
+        <span class="book-source-tag">${escapeHtml(event.book_label)}</span>
         <span>${event.outcome === "pass" ? "对了" : `仍错 ${escapeHtml(event.error_level || "B")}`}</span>
         <span>下次 ${escapeHtml(event.next_due_at || "-")}</span>
         ${tierTag}
         ${reviewTag}
         ${failTag}
+        ${context}
       </div>
       <div class="history-edit">
         <select class="history-outcome">
@@ -492,6 +624,7 @@ function bindFeedbackButtons() {
     button.addEventListener("click", async () => {
       const row = button.closest(".feedback-row");
       const payload = {
+        book_id: row.dataset.bookId,
         question_id: row.dataset.qid,
         outcome: button.dataset.outcome,
         error_level: button.dataset.level || null,
@@ -532,6 +665,7 @@ function bindHistorySaves() {
       if (level && outcome === "pass") outcome = "wrong";
       if (outcome === "wrong" && !level) level = "B";
       const payload = {
+        book_id: card.dataset.bookId,
         outcome,
         error_level: outcome === "wrong" ? (level || "B") : null,
         note: card.querySelector(".history-note").value.trim()
