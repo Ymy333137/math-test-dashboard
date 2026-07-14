@@ -58,6 +58,9 @@ class Workbook880IntegrationTests(unittest.TestCase):
         item_state = state.setdefault("items", {}).setdefault(record_660["question_id"], {"history": []})
         item_state["book_id"] = "workbook_660"
         item_state["next_due_at"] = date.today().isoformat()
+        item_state_880 = state["items"].setdefault(record_880["question_id"], {"history": []})
+        item_state_880["book_id"] = "workbook_880"
+        item_state_880["next_due_at"] = date.today().isoformat()
         app.save_review_state(state)
 
         key_660 = app.schedule_key("workbook_660", record_660["question_id"])
@@ -138,6 +141,39 @@ class Workbook880IntegrationTests(unittest.TestCase):
             [history_880["section"], history_880["question_type"], history_880["display_id"]],
             [record_880["section"], record_880["question_type"], record_880["display_id"]],
         )
+
+    def test_today_history_excludes_earlier_events_but_keeps_total(self):
+        record = next(
+            record
+            for record in app.load_book_record("workbook_660")["history"]
+            if record.get("error_level")
+        )
+        today = date.today()
+        yesterday = today - timedelta(days=1)
+        state = app.default_review_state()
+        state["items"] = {
+            record["question_id"]: {
+                "book_id": "workbook_660",
+                "history": [
+                    {
+                        "reviewed_at": f"{yesterday.isoformat()}T09:00:00",
+                        "outcome": "wrong",
+                        "error_level": "B",
+                    },
+                    {
+                        "reviewed_at": f"{today.isoformat()}T09:00:00",
+                        "outcome": "pass",
+                        "error_level": None,
+                    },
+                ],
+            }
+        }
+
+        history = app.flatten_review_history(state, limit=None, target_date=today)
+        self.assertEqual(len(history), 1)
+        self.assertEqual(history[0]["event_index"], 1)
+        self.assertEqual(history[0]["review_count"], 2)
+        self.assertEqual(app.count_review_events(state), 2)
 
     def test_deleted_overdue_state_is_not_reinserted(self):
         record = next(

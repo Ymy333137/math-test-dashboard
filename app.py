@@ -1116,7 +1116,11 @@ def build_activity(state: dict[str, Any], days: int = 112) -> list[dict[str, Any
     ]
 
 
-def flatten_review_history(state: dict[str, Any], limit: int = 40) -> list[dict[str, Any]]:
+def flatten_review_history(
+    state: dict[str, Any],
+    limit: int | None = 40,
+    target_date: date | None = None,
+) -> list[dict[str, Any]]:
     events = []
     index = load_index()
     book_records = load_all_book_records(index)
@@ -1132,6 +1136,8 @@ def flatten_review_history(state: dict[str, Any], limit: int = 40) -> list[dict[
         for event_index, event in enumerate(item.get("history", [])):
             if event.get("outcome") != "pass":
                 cumulative_fail_count += 1
+            if target_date and event_review_date(event) != target_date:
+                continue
             events.append(
                 {
                     "book_id": event.get("book_id") or book_id,
@@ -1159,7 +1165,7 @@ def flatten_review_history(state: dict[str, Any], limit: int = 40) -> list[dict[
                 }
             )
     events.sort(key=lambda item: item.get("reviewed_at") or "", reverse=True)
-    return events[:limit]
+    return events[:limit] if limit is not None else events
 
 
 def count_review_events(state: dict[str, Any]) -> int:
@@ -1370,11 +1376,13 @@ async def api_review_feedback(payload: ReviewFeedbackRequest):
 
 
 @app.get("/api/review/history")
-async def api_review_history(limit: int = Query(default=40, ge=1, le=200)):
+async def api_review_history():
     state = load_review_state()
+    today = date.today()
     return JSONResponse(
         content={
-            "history": flatten_review_history(state, limit),
+            "date": today.isoformat(),
+            "history": flatten_review_history(state, limit=None, target_date=today),
             "activity": build_activity(state),
             "total_reviews": count_review_events(state),
         }

@@ -404,7 +404,7 @@ async function loadReview() {
   if (state.review) query.set("tiers", selectedTiers().join(","));
   const [review, reviewHistory] = await Promise.all([
     fetchJson(`/api/review/today?${query.toString()}`),
-    fetchJson("/api/review/history?limit=30")
+    fetchJson("/api/review/history")
   ]);
   state.review = review;
   state.reviewHistory = reviewHistory;
@@ -550,7 +550,7 @@ function renderReviewHistory() {
   const totalReviews = state.reviewHistory?.total_reviews || 0;
   $("#reviewHistoryTotal").textContent = `累计复盘 ${totalReviews} 题`;
   if (!history.length) {
-    container.innerHTML = '<div class="empty">暂无复盘记录。完成一次回滚后会出现在这里。</div>';
+    container.innerHTML = '<div class="empty">今天暂无复盘记录。完成一次回滚后会出现在这里。</div>';
     return;
   }
   container.innerHTML = groupHistoryByDate(history).map((group) => `
