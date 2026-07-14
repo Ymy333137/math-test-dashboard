@@ -633,7 +633,6 @@ def normalize_schedule_buckets(buckets: dict[str, Any]) -> dict[str, list[str]]:
             if key and key not in keys:
                 keys.append(key)
         if keys:
-            keys = sort_schedule_keys(keys)
             normalized[due_at] = keys
     return normalized
 
@@ -835,6 +834,11 @@ def ensure_review_schedule(
 ) -> dict[str, Any]:
     schedule = load_review_schedule()
     changed = discard_overdue_buckets(schedule, today)
+    scheduled_due = {
+        key: due_at
+        for due_at, key in iter_scheduled_entries(schedule)
+    }
+    known_keys = set(scheduled_due)
     for book_id, book_record in book_records.items():
         history_records = records_by_question(book_record)
         full_records = full_records_by_question(book_record)
@@ -846,8 +850,12 @@ def ensure_review_schedule(
             state_item = state.get("items", {}).get(question_id, {})
             next_due = date_from_iso(state_item.get("next_due_at"))
             if next_due and next_due >= today:
-                changed = add_schedule_key(schedule, next_due, key, replace=True) or changed
-            elif key not in scheduled_keys(schedule):
+                due_at = next_due.isoformat()
+                if scheduled_due.get(key) != due_at:
+                    changed = add_schedule_key(schedule, next_due, key, replace=True) or changed
+                    scheduled_due[key] = due_at
+                    known_keys.add(key)
+            elif key not in known_keys:
                 if next_due:
                     continue
                 recorded_date = record_timestamp_date(full_records.get(question_id)) or today
@@ -855,6 +863,8 @@ def ensure_review_schedule(
                 if due_at < today:
                     continue
                 changed = add_schedule_key(schedule, due_at, key, replace=False) or changed
+                scheduled_due[key] = due_at.isoformat()
+                known_keys.add(key)
 
     today_keys = schedule_entries_for_date(schedule, today)
     reviewed_today_keys = reviewed_keys_on_date(book_records, state, today)

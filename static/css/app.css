@@ -733,6 +733,20 @@ textarea:focus {
     #fcfdfc;
 }
 
+.review-card.is-submitting {
+  opacity: 0.68;
+  transition: opacity 120ms ease;
+}
+
+.feedback-row button.is-selected {
+  filter: saturate(1.15);
+  transform: translateY(1px);
+}
+
+.feedback-row button:disabled {
+  cursor: wait;
+}
+
 .review-card.review-level-A {
   background:
     linear-gradient(90deg, rgba(47, 111, 159, 0.13), transparent 28%),

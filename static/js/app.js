@@ -402,9 +402,14 @@ async function loadReview() {
   const limit = Number($("#dailyLimit").value || 10);
   const query = new URLSearchParams({ limit: String(limit) });
   if (state.review) query.set("tiers", selectedTiers().join(","));
-  state.review = await fetchJson(`/api/review/today?${query.toString()}`);
+  const [review, reviewHistory] = await Promise.all([
+    fetchJson(`/api/review/today?${query.toString()}`),
+    fetchJson("/api/review/history?limit=30")
+  ]);
+  state.review = review;
+  state.reviewHistory = reviewHistory;
   renderReview();
-  await loadReviewHistory();
+  renderReviewHistory();
 }
 
 async function saveReviewSettingsAndLoad() {
@@ -539,11 +544,6 @@ function activityHeatLevel(ratio, count) {
   return 4;
 }
 
-async function loadReviewHistory() {
-  state.reviewHistory = await fetchJson("/api/review/history?limit=30");
-  renderReviewHistory();
-}
-
 function renderReviewHistory() {
   const container = $("#reviewHistory");
   const history = state.reviewHistory?.history || [];
@@ -623,6 +623,7 @@ function bindFeedbackButtons() {
   $$(".feedback-row button").forEach((button) => {
     button.addEventListener("click", async () => {
       const row = button.closest(".feedback-row");
+      if (row.dataset.submitting === "true") return;
       const payload = {
         book_id: row.dataset.bookId,
         question_id: row.dataset.qid,
@@ -630,13 +631,33 @@ function bindFeedbackButtons() {
         error_level: button.dataset.level || null,
         note: row.querySelector(".review-note-input")?.value.trim() || ""
       };
-      await fetchJson("/api/review/feedback", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
-      });
-      await loadReview();
-      setStatus(`已记录 ${payload.question_id}`);
+      const card = row.closest(".review-card");
+      const originalText = button.textContent;
+      row.dataset.submitting = "true";
+      row.setAttribute("aria-busy", "true");
+      card?.classList.add("is-submitting");
+      button.classList.add("is-selected");
+      button.textContent = "记录中";
+      row.querySelectorAll("button").forEach((item) => { item.disabled = true; });
+      setStatus(`正在记录 ${payload.question_id}`);
+
+      try {
+        await fetchJson("/api/review/feedback", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        await loadReview();
+        setStatus(`已记录 ${payload.question_id}`);
+      } catch (error) {
+        row.dataset.submitting = "false";
+        row.removeAttribute("aria-busy");
+        card?.classList.remove("is-submitting");
+        button.classList.remove("is-selected");
+        button.textContent = originalText;
+        row.querySelectorAll("button").forEach((item) => { item.disabled = false; });
+        setStatus(`记录失败：${error.message}`);
+      }
     });
   });
 }
