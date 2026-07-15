@@ -14,13 +14,13 @@ class Workbook880IntegrationTests(unittest.TestCase):
     def test_dashboard_and_structured_errors(self):
         dashboard = app.build_dashboard_payload()
         book = next(item for item in dashboard["books"] if item["book_id"] == "workbook_880")
-        self.assertEqual(book["total"], 31)
-        self.assertEqual(book["abc_counts"], {"A": 4, "B": 7, "C": 2})
-        self.assertEqual(book["total"] - book["error_total"], 18)
+        self.assertEqual(book["total"], 48)
+        self.assertEqual(book["abc_counts"], {"A": 5, "B": 12, "C": 4})
+        self.assertEqual(book["total"] - book["error_total"], 27)
 
         errors = app.build_book_errors("workbook_880")
         items = [item for unit in errors["units"] for level in unit["levels"].values() for item in level]
-        self.assertEqual(len(items), 13)
+        self.assertEqual(len(items), 21)
         self.assertTrue(all(item["section"] and item["question_type"] and item["display_id"] for item in items))
 
     def test_internal_ids_and_record_order_are_stable(self):
