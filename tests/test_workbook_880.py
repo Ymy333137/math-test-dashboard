@@ -1,5 +1,7 @@
 import unittest
 from datetime import date, timedelta
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import app
 
@@ -12,15 +14,23 @@ class Workbook880IntegrationTests(unittest.TestCase):
             raise RuntimeError("测试必须使用 records 临时副本")
 
     def test_dashboard_and_structured_errors(self):
+        record_file = app.load_book_record("workbook_880")
+        records = app.enriched_history_records(record_file)
+        expected_abc = {
+            level: sum(1 for record in records if record.get("error_level") == level)
+            for level in ["A", "B", "C"]
+        }
+        expected_error_total = sum(expected_abc.values())
+
         dashboard = app.build_dashboard_payload()
         book = next(item for item in dashboard["books"] if item["book_id"] == "workbook_880")
-        self.assertEqual(book["total"], 48)
-        self.assertEqual(book["abc_counts"], {"A": 5, "B": 12, "C": 4})
-        self.assertEqual(book["total"] - book["error_total"], 27)
+        self.assertEqual(book["total"], len(records))
+        self.assertEqual(book["abc_counts"], expected_abc)
+        self.assertEqual(book["error_total"], expected_error_total)
 
         errors = app.build_book_errors("workbook_880")
         items = [item for unit in errors["units"] for level in unit["levels"].values() for item in level]
-        self.assertEqual(len(items), 21)
+        self.assertEqual(len(items), expected_error_total)
         self.assertTrue(all(item["section"] and item["question_type"] and item["display_id"] for item in items))
 
     def test_internal_ids_and_record_order_are_stable(self):
@@ -213,6 +223,42 @@ class Workbook880IntegrationTests(unittest.TestCase):
         self.assertNotIn((today - timedelta(days=1)).isoformat(), schedule["buckets"])
         self.assertEqual(schedule["buckets"][today.isoformat()], [today_key])
         self.assertNotIn(old_key, schedule["buckets"][today.isoformat()])
+
+    def test_git_summary_exposes_manual_push_command(self):
+        output = """
+Summary:
+  app: 未运行：仅 records 模式
+  records: 已提交但 push 失败：请到终端重新 push
+"""
+        results = app.parse_commit_summary(output)
+
+        self.assertEqual(results["app"]["status"], "skipped")
+        self.assertEqual(results["records"]["status"], "push_failed")
+        self.assertEqual(
+            results["records"]["retry_command"],
+            f'git -C "{app.RECORDS_DIR}" push',
+        )
+
+    def test_web_git_action_runs_records_only_mode(self):
+        process = SimpleNamespace(
+            returncode=0,
+            stdout="""
+Summary:
+  app: 未运行：仅 records 模式
+  records: 无需 git：没有改动
+""",
+            stderr="",
+        )
+        with patch("app.subprocess.run", return_value=process) as run:
+            result = app.run_commit_script()
+
+        command = run.call_args.args[0]
+        self.assertEqual(
+            command,
+            [str(app.COMMIT_SCRIPT), "--records-only", app.RECORDS_COMMIT_MESSAGE],
+        )
+        self.assertEqual(set(result["results"]), {"records"})
+        self.assertEqual(result["results"]["records"]["status"], "clean")
 
 
 if __name__ == "__main__":

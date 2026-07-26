@@ -177,6 +177,91 @@ textarea:focus {
   letter-spacing: 0;
 }
 
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.git-commit-action {
+  min-height: 36px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid #b9d4ca;
+  border-radius: 7px;
+  padding: 7px 12px;
+  background: var(--green-soft);
+  color: var(--ink);
+  cursor: pointer;
+  font-weight: 750;
+}
+
+.git-commit-action[hidden] {
+  display: none;
+}
+
+.git-commit-action:hover {
+  border-color: var(--accent);
+  background: #dceee7;
+}
+
+.git-commit-action:disabled {
+  cursor: wait;
+  opacity: 0.66;
+}
+
+.git-commit-icon {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.git-commit-notice {
+  display: grid;
+  gap: 7px;
+  margin: 0 0 14px;
+  padding: 11px 13px;
+  border: 1px solid #b9d4ca;
+  border-radius: 7px;
+  background: var(--green-soft);
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.git-commit-notice[hidden] {
+  display: none;
+}
+
+.git-commit-notice.is-error {
+  border-color: #e2aaa6;
+  background: var(--red-soft);
+  color: #8f2f2a;
+}
+
+.git-commit-notice strong {
+  font-size: 14px;
+}
+
+.git-result-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+}
+
+.git-retry-command {
+  width: fit-content;
+  max-width: 100%;
+  padding: 5px 8px;
+  border: 1px solid rgba(143, 47, 42, 0.2);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.72);
+  color: inherit;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
 .status-pill,
 .level-badge {
   display: inline-flex;
@@ -1094,6 +1179,11 @@ textarea:focus {
   .topbar {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .topbar-actions {
+    width: 100%;
+    justify-content: space-between;
   }
 
   .error-card {

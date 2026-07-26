@@ -1,7 +1,9 @@
+import asyncio
 import json
 import os
 import re
 import subprocess
+import threading
 from collections import Counter
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -28,6 +30,9 @@ AUTO_SYNC_RECORDS = os.getenv("AUTO_SYNC_RECORDS", "1").lower() not in {"0", "fa
 INDEX_FILE = RECORDS_DIR / "math_records.json"
 REVIEW_STATE_FILE = RECORDS_DIR / "review_state.json"
 REVIEW_SCHEDULE_FILE = RECORDS_DIR / "review_schedule.json"
+COMMIT_SCRIPT = BASE_DIR.parent / "commit-updates.sh"
+GIT_COMMIT_LOCK = threading.Lock()
+RECORDS_COMMIT_MESSAGE = "更新复盘状态和计划"
 
 app = FastAPI(title="数学错题工作台", version="0.3.0")
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
@@ -109,6 +114,72 @@ def write_json(path: Path, payload: dict[str, Any]) -> None:
         json.dump(payload, file, ensure_ascii=False, indent=2)
         file.write("\n")
     tmp_path.replace(path)
+
+
+def parse_commit_summary(output: str) -> dict[str, dict[str, str]]:
+    summaries = {"app": "未运行", "records": "未运行"}
+    in_summary = False
+    for line in output.splitlines():
+        if line.strip() == "Summary:":
+            in_summary = True
+            continue
+        if not in_summary:
+            continue
+        match = re.match(r"^\s*(app|records):\s*(.+?)\s*$", line)
+        if match:
+            summaries[match.group(1)] = match.group(2)
+
+    results = {}
+    repo_dirs = {"app": BASE_DIR, "records": RECORDS_DIR}
+    for repo, message in summaries.items():
+        if message.startswith("提交成功"):
+            status = "success"
+        elif message.startswith("无需 git"):
+            status = "clean"
+        elif message.startswith("已提交但 push 失败"):
+            status = "push_failed"
+        elif message.startswith("未运行"):
+            status = "skipped"
+        else:
+            status = "failed"
+        results[repo] = {
+            "status": status,
+            "message": message,
+            "retry_command": f'git -C "{repo_dirs[repo]}" push' if status == "push_failed" else "",
+        }
+    return results
+
+
+def run_commit_script() -> dict[str, Any]:
+    if not COMMIT_SCRIPT.is_file():
+        raise HTTPException(status_code=500, detail=f"没有找到提交脚本：{COMMIT_SCRIPT}")
+    try:
+        result = subprocess.run(
+            [str(COMMIT_SCRIPT), "--records-only", RECORDS_COMMIT_MESSAGE],
+            cwd=COMMIT_SCRIPT.parent,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+        )
+    except subprocess.TimeoutExpired as error:
+        raise HTTPException(status_code=504, detail="Git 操作超过 120 秒，请到终端检查并重新 push") from error
+    except OSError as error:
+        raise HTTPException(status_code=500, detail=f"无法运行提交脚本：{error}") from error
+
+    output = "\n".join(part for part in [result.stdout.strip(), result.stderr.strip()] if part)
+    results = {"records": parse_commit_summary(output)["records"]}
+    push_failed = any(item["status"] == "push_failed" for item in results.values())
+    return {
+        "ok": result.returncode == 0,
+        "push_failed": push_failed,
+        "results": results,
+        "message": (
+            "records 提交与推送完成"
+            if result.returncode == 0
+            else "records 本地 commit 已尽量保留；请按提示到终端重新 push"
+        ),
+    }
 
 
 def load_index() -> dict[str, Any]:
@@ -1392,3 +1463,13 @@ async def api_review_history():
 @app.patch("/api/review/history/{question_id}/{event_index}")
 async def api_review_history_update(question_id: str, event_index: int, payload: ReviewEventUpdateRequest):
     return JSONResponse(content=update_review_event(question_id, event_index, payload))
+
+
+@app.post("/api/git/commit")
+async def api_git_commit():
+    if not GIT_COMMIT_LOCK.acquire(blocking=False):
+        raise HTTPException(status_code=409, detail="已有 Git 操作正在进行，请稍候")
+    try:
+        return JSONResponse(content=await asyncio.to_thread(run_commit_script))
+    finally:
+        GIT_COMMIT_LOCK.release()

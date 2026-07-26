@@ -34,6 +34,7 @@ async function init() {
   bindLevelTabs();
   bindErrorFilters();
   bindReviewControls();
+  bindGitCommit();
   await loadDashboard();
   await loadBookErrors(state.activeBook);
   await loadReview();
@@ -48,6 +49,7 @@ function bindNavigation() {
       $$(".view").forEach((view) => view.classList.remove("active"));
       $(`#${target}View`).classList.add("active");
       $("#pageTitle").textContent = button.textContent;
+      $("#gitCommitButton").hidden = target !== "review";
       if (target === "review") await loadReview();
     });
   });
@@ -392,6 +394,65 @@ function bindReviewControls() {
   $("#reviewTierFilters").addEventListener("change", (event) => {
     if (event.target.matches("input[name='tier']")) saveReviewSettingsAndLoad();
   });
+}
+
+function bindGitCommit() {
+  $("#gitCommitButton").addEventListener("click", runGitCommit);
+}
+
+async function runGitCommit() {
+  const button = $("#gitCommitButton");
+  const label = $("#gitCommitButtonLabel");
+  const notice = $("#gitCommitNotice");
+  button.disabled = true;
+  button.setAttribute("aria-busy", "true");
+  label.textContent = "提交中";
+  notice.hidden = false;
+  notice.classList.remove("is-error");
+  notice.innerHTML = "<strong>正在提交 records</strong><span>完成前请不要关闭本地服务。</span>";
+  setStatus("records 提交中");
+
+  try {
+    const result = await fetchJson("/api/git/commit", { method: "POST" });
+    renderGitCommitResult(result);
+    setStatus(result.ok ? "records 提交完成" : "records push 未完成");
+  } catch (error) {
+    notice.classList.add("is-error");
+    notice.innerHTML = `
+      <strong>Git 操作未完成</strong>
+      <span>${escapeHtml(error.message)}</span>
+      <span>请打开终端检查 records 仓库；如果已经产生本地 commit，请手动执行：</span>
+      <code class="git-retry-command">git -C "/Users/y-mac/Documents/math-test_2/records" push</code>
+    `;
+    setStatus("Git 操作失败");
+  } finally {
+    button.disabled = false;
+    button.removeAttribute("aria-busy");
+    label.textContent = "提交 records";
+  }
+}
+
+function renderGitCommitResult(result) {
+  const notice = $("#gitCommitNotice");
+  const repoLabels = { app: "app", records: "records" };
+  const repoResults = Object.entries(result.results || {});
+  const retryCommands = repoResults
+    .map(([, item]) => item.retry_command)
+    .filter(Boolean);
+
+  notice.classList.toggle("is-error", !result.ok);
+  notice.innerHTML = `
+    <strong>${escapeHtml(result.message)}</strong>
+    <div class="git-result-list">
+      ${repoResults.map(([repo, item]) => `
+        <span>${escapeHtml(repoLabels[repo] || repo)}：${escapeHtml(item.message)}</span>
+      `).join("")}
+    </div>
+    ${retryCommands.length ? `
+      <span>网络恢复后，请在终端执行：</span>
+      ${retryCommands.map((command) => `<code class="git-retry-command">${escapeHtml(command)}</code>`).join("")}
+    ` : ""}
+  `;
 }
 
 function selectedTiers() {

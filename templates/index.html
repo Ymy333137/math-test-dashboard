@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>数学错题工作台</title>
-  <link rel="stylesheet" href="/static/css/app.css?v=20260714-today-history">
+  <link rel="stylesheet" href="/static/css/app.css?v=20260726-records-git">
 </head>
 <body>
   <div class="shell">
@@ -36,7 +36,13 @@
           <p class="eyebrow">Local Dashboard</p>
           <h2 id="pageTitle">总览</h2>
         </div>
-        <div class="status-pill" id="dataStatus">加载中</div>
+        <div class="topbar-actions">
+          <button class="git-commit-action" id="gitCommitButton" type="button" hidden>
+            <span class="git-commit-icon" aria-hidden="true">↑</span>
+            <span id="gitCommitButtonLabel">提交 records</span>
+          </button>
+          <div class="status-pill" id="dataStatus">加载中</div>
+        </div>
       </header>
 
       <section class="view active" id="overviewView">
@@ -105,6 +111,8 @@
       </section>
 
       <section class="view" id="reviewView">
+        <div class="git-commit-notice" id="gitCommitNotice" role="status" aria-live="polite" hidden></div>
+
         <div class="review-grid">
           <section class="panel control-panel">
             <div class="panel-head">
@@ -203,6 +211,6 @@
     </main>
   </div>
 
-  <script src="/static/js/app.js?v=20260714-today-history"></script>
+  <script src="/static/js/app.js?v=20260726-records-git"></script>
 </body>
 </html>
