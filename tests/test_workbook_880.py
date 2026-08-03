@@ -260,6 +260,123 @@ Summary:
         self.assertEqual(set(result["results"]), {"records"})
         self.assertEqual(result["results"]["records"]["status"], "clean")
 
+    def test_daily_queue_keeps_every_due_item_above_soft_limit(self):
+        records = [
+            record
+            for record in app.load_book_record("workbook_660")["history"]
+            if record.get("error_level")
+        ][:3]
+        today = date.today()
+        keys = [app.schedule_key("workbook_660", record["question_id"]) for record in records]
+        schedule = app.default_review_schedule()
+        schedule["buckets"] = {today.isoformat(): keys.copy()}
+        schedule["daily_plans"] = {today.isoformat(): keys.copy()}
+
+        with patch("app.ensure_review_schedule", return_value=schedule):
+            payload = app.build_review_payload(daily_limit=1)
+
+        self.assertEqual(len(payload["queue"]), 3)
+        self.assertEqual(payload["deferred"], [])
+        self.assertEqual(payload["summary"]["overflow_total"], 2)
+
+    def test_backlog_is_a_newest_first_stack_and_reentry_resets_position(self):
+        schedule = app.default_review_schedule()
+        schedule["buckets"] = {date.today().isoformat(): ["book:q1", "book:q2", "book:q3"]}
+
+        app.add_backlog_keys(schedule, ["book:q1", "book:q2"])
+        self.assertEqual(schedule["backlog"], ["book:q1", "book:q2"])
+
+        schedule["buckets"] = {date.today().isoformat(): ["book:q2"]}
+        app.add_backlog_keys(schedule, ["book:q2"])
+        self.assertEqual(schedule["backlog"], ["book:q2", "book:q1"])
+        self.assertNotIn("book:q2", schedule["buckets"].get(date.today().isoformat(), []))
+
+    def test_release_buffer_uses_capacity_then_forces_starved_items(self):
+        today = date.today()
+        schedule = app.default_review_schedule()
+        schedule["buckets"] = {today.isoformat(): [f"book:fixed-{index}" for index in range(19)]}
+        schedule["release_buffer"] = {today.isoformat(): ["book:buffer-1", "book:buffer-2"]}
+
+        changed = app.activate_release_buffer(schedule, today, daily_limit=20, max_wait_days=7)
+
+        self.assertTrue(changed)
+        self.assertIn("book:buffer-1", schedule["buckets"][today.isoformat()])
+        self.assertIn("book:buffer-2", schedule["release_buffer"][today.isoformat()])
+
+        starved_day = today + timedelta(days=7)
+        schedule["buckets"] = {starved_day.isoformat(): [f"book:busy-{index}" for index in range(20)]}
+        changed = app.activate_release_buffer(schedule, starved_day, daily_limit=20, max_wait_days=7)
+
+        self.assertTrue(changed)
+        self.assertIn("book:buffer-2", schedule["buckets"][starved_day.isoformat()])
+        self.assertIn("book:buffer-2", schedule["forced_releases"][starved_day.isoformat()])
+
+    def test_terminal_pass_graduates_and_maintenance_failure_reactivates(self):
+        record = next(
+            record
+            for record in app.load_book_record("workbook_660")["history"]
+            if record.get("error_level") == "A"
+        )
+        state = app.default_review_state()
+        state["items"] = {
+            record["question_id"]: {
+                "book_id": "workbook_660",
+                "error_level": "A",
+                "interval_index": len(state["settings"]["intervals"]["A"]) - 1,
+                "history": [],
+            }
+        }
+
+        with (
+            patch("app.load_review_state", return_value=state),
+            patch("app.save_review_state"),
+            patch("app.sync_schedule_for_question") as sync,
+        ):
+            result = app.update_review_feedback(
+                app.ReviewFeedbackRequest(
+                    book_id="workbook_660",
+                    question_id=record["question_id"],
+                    outcome="pass",
+                    queue_source="daily",
+                )
+            )
+
+            self.assertEqual(result["status"], "graduated")
+            self.assertEqual(result["interval_days"], 60)
+            self.assertTrue(result["buffered"])
+            self.assertEqual(state["items"][record["question_id"]]["status"], "graduated")
+            self.assertTrue(sync.call_args.kwargs["buffered"])
+
+            result = app.update_review_feedback(
+                app.ReviewFeedbackRequest(
+                    book_id="workbook_660",
+                    question_id=record["question_id"],
+                    outcome="wrong",
+                    error_level="B",
+                    queue_source="maintenance",
+                )
+            )
+
+        self.assertEqual(result["status"], "active")
+        self.assertEqual(result["interval_days"], 1)
+        self.assertFalse(result["buffered"])
+        self.assertEqual(state["items"][record["question_id"]]["error_level"], "B")
+
+    def test_review_sort_is_new_first_then_recorded_time_descending(self):
+        items = [
+            {"question_id": "old-new", "is_new": True, "recorded_ordinal": 10, "sort_order": 1},
+            {"question_id": "new-new", "is_new": True, "recorded_ordinal": 20, "sort_order": 2},
+            {"question_id": "new-mechanical", "is_new": False, "recorded_ordinal": 30, "sort_order": 3},
+            {"question_id": "old-mechanical", "is_new": False, "recorded_ordinal": 5, "sort_order": 4},
+        ]
+
+        ordered = sorted(items, key=app.review_sort_key)
+
+        self.assertEqual(
+            [item["question_id"] for item in ordered],
+            ["new-new", "old-new", "new-mechanical", "old-mechanical"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
