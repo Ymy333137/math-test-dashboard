@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>数学错题工作台</title>
-  <link rel="stylesheet" href="/static/css/app.css?v=20260803-review-flow">
+  <link rel="stylesheet" href="/static/css/app.css?v=20260803-review-lifecycle">
 </head>
 <body>
   <div class="shell">
@@ -21,6 +21,7 @@
         <button class="nav-item active" data-target="overview">总览</button>
         <button class="nav-item" data-target="review">回滚复习</button>
         <button class="nav-item" data-target="errors">错题记录</button>
+        <button class="nav-item" data-target="graduate">毕业题库</button>
       </nav>
 
       <div class="book-panel">
@@ -183,20 +184,22 @@
           </section>
         </div>
 
-        <section class="panel graduated-panel">
-          <div class="panel-head">
-            <h3>毕业题库</h3>
-            <span id="reviewGraduatedMeta">60 天低频维护 · 0 题</span>
-          </div>
-          <div id="reviewGraduated" class="graduated-list"></div>
-        </section>
-
         <section class="panel review-history-panel">
           <div class="panel-head">
             <h3>复盘记录</h3>
             <span id="reviewHistoryTotal">累计复盘 0 题</span>
           </div>
           <div id="reviewHistory" class="history-list"></div>
+        </section>
+      </section>
+
+      <section class="view" id="graduateView">
+        <section class="panel graduated-panel">
+          <div class="panel-head">
+            <h3>毕业题库</h3>
+            <span id="reviewGraduatedMeta">60 天低频维护 · 0 题</span>
+          </div>
+          <div id="reviewGraduated" class="graduated-list"></div>
         </section>
       </section>
 
@@ -220,6 +223,6 @@
     </main>
   </div>
 
-  <script src="/static/js/app.js?v=20260803-review-flow"></script>
+  <script src="/static/js/app.js?v=20260803-review-lifecycle"></script>
 </body>
 </html>

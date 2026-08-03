@@ -1055,7 +1055,7 @@ textarea:focus {
 }
 
 .graduated-panel {
-  margin-top: 14px;
+  min-height: min(720px, calc(100vh - 150px));
 }
 
 .graduated-list {
