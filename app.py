@@ -32,7 +32,6 @@ REVIEW_STATE_FILE = RECORDS_DIR / "review_state.json"
 REVIEW_SCHEDULE_FILE = RECORDS_DIR / "review_schedule.json"
 COMMIT_SCRIPT = BASE_DIR.parent / "commit-updates.sh"
 GIT_COMMIT_LOCK = threading.Lock()
-REVIEW_WRITE_LOCK = threading.Lock()
 RECORDS_COMMIT_MESSAGE = "更新复盘状态和计划"
 
 app = FastAPI(title="数学错题工作台", version="0.3.0")
@@ -60,8 +59,6 @@ DEFAULT_REVIEW_SETTINGS = {
     "active_workbook": "workbook_660",
     "tier_schema_version": 2,
     "first_pass_interval": 5,
-    "release_buffer_max_wait": 7,
-    "maintenance_interval": 60,
     "intervals": {
         "A": [1, 3, 10, 21],
         "B": [1, 2, 5, 12, 24],
@@ -94,7 +91,6 @@ class ReviewFeedbackRequest(BaseModel):
     outcome: str = Field(..., pattern="^(pass|wrong)$")
     error_level: str | None = Field(default=None, pattern="^[ABC]$")
     note: str | None = None
-    queue_source: str = Field(default="daily", pattern="^(daily|backlog|maintenance)$")
 
 
 class ReviewEventUpdateRequest(BaseModel):
@@ -102,16 +98,6 @@ class ReviewEventUpdateRequest(BaseModel):
     outcome: str = Field(..., pattern="^(pass|wrong)$")
     error_level: str | None = Field(default=None, pattern="^[ABC]$")
     note: str | None = None
-
-
-class BacklogMoveRequest(BaseModel):
-    keys: list[str] = Field(min_length=1)
-
-
-class GraduateRestoreRequest(BaseModel):
-    book_id: str
-    question_id: str
-    error_level: str = Field(default="B", pattern="^[ABC]$")
 
 
 def read_json(path: Path) -> dict[str, Any]:
@@ -670,16 +656,13 @@ def save_review_state(state: dict[str, Any]) -> None:
 
 def default_review_schedule() -> dict[str, Any]:
     return {
-        "version": "1.1",
+        "version": "1.0",
         "timezone": "Asia/Shanghai",
         "policy": {
-            "description": "固定日期计划与动态释放缓冲并存；遗留栈中的题暂停机械回滚。",
+            "description": "按日期 bucket 持久化复盘计划；每天只读取当天题号索引，过期 bucket 直接删除，是否迁移由用户手动决定。",
             "key_format": "book_id:question_id",
         },
         "buckets": {},
-        "release_buffer": {},
-        "backlog": [],
-        "forced_releases": {},
         "daily_plans": {},
     }
 
@@ -688,18 +671,12 @@ def load_review_schedule() -> dict[str, Any]:
     if not REVIEW_SCHEDULE_FILE.exists():
         return default_review_schedule()
     schedule = read_json(REVIEW_SCHEDULE_FILE)
-    schedule.setdefault("version", "1.1")
+    schedule.setdefault("version", "1.0")
     schedule.setdefault("timezone", "Asia/Shanghai")
     schedule.setdefault("policy", default_review_schedule()["policy"])
     schedule.setdefault("buckets", {})
-    schedule.setdefault("release_buffer", {})
-    schedule.setdefault("backlog", [])
-    schedule.setdefault("forced_releases", {})
     schedule.setdefault("daily_plans", {})
     schedule["buckets"] = normalize_schedule_buckets(schedule["buckets"])
-    schedule["release_buffer"] = normalize_schedule_buckets(schedule["release_buffer"])
-    schedule["backlog"] = normalize_schedule_keys(schedule["backlog"])
-    schedule["forced_releases"] = normalize_schedule_buckets(schedule["forced_releases"])
     schedule["daily_plans"] = normalize_schedule_buckets(schedule["daily_plans"])
     return schedule
 
@@ -731,21 +708,18 @@ def normalize_schedule_buckets(buckets: dict[str, Any]) -> dict[str, list[str]]:
     return normalized
 
 
-def normalize_schedule_keys(values: list[Any]) -> list[str]:
-    keys: list[str] = []
-    for value in values or []:
-        key = schedule_key_from_value(value)
-        if key and key not in keys:
-            keys.append(key)
-    return keys
-
-
 def save_review_schedule(schedule: dict[str, Any]) -> None:
     schedule["updated_at"] = datetime.now().isoformat(timespec="seconds")
-    for field in ["buckets", "release_buffer", "forced_releases", "daily_plans"]:
-        buckets = normalize_schedule_buckets(schedule.get(field, {}))
-        schedule[field] = {due_at: buckets[due_at] for due_at in sorted(buckets)}
-    schedule["backlog"] = normalize_schedule_keys(schedule.get("backlog", []))
+    buckets = normalize_schedule_buckets(schedule.get("buckets", {}))
+    schedule["buckets"] = {
+        due_at: buckets[due_at]
+        for due_at in sorted(buckets)
+    }
+    daily_plans = normalize_schedule_buckets(schedule.get("daily_plans", {}))
+    schedule["daily_plans"] = {
+        due_at: daily_plans[due_at]
+        for due_at in sorted(daily_plans)
+    }
     write_json(REVIEW_SCHEDULE_FILE, schedule)
 
 
@@ -856,37 +830,21 @@ def iter_scheduled_entries(schedule: dict[str, Any]):
             yield due_at, key
 
 
-def iter_buffered_entries(schedule: dict[str, Any]):
-    for earliest_at, keys in schedule.get("release_buffer", {}).items():
-        for key in keys:
-            yield earliest_at, key
-
-
 def scheduled_keys(schedule: dict[str, Any]) -> set[str]:
-    return {
-        key
-        for _, key in [*iter_scheduled_entries(schedule), *iter_buffered_entries(schedule)]
-        if key
-    }
-
-
-def remove_key_from_bucket_map(bucket_map: dict[str, list[str]], key: str) -> bool:
-    changed = False
-    for bucket_date in list(bucket_map):
-        kept = [scheduled_key for scheduled_key in bucket_map.get(bucket_date, []) if scheduled_key != key]
-        if len(kept) != len(bucket_map.get(bucket_date, [])):
-            changed = True
-        if kept:
-            bucket_map[bucket_date] = kept
-        else:
-            bucket_map.pop(bucket_date, None)
-    return changed
+    return {key for _, key in iter_scheduled_entries(schedule) if key}
 
 
 def remove_schedule_key(schedule: dict[str, Any], key: str) -> bool:
-    changed = remove_key_from_bucket_map(schedule.setdefault("buckets", {}), key)
-    changed = remove_key_from_bucket_map(schedule.setdefault("release_buffer", {}), key) or changed
-    changed = remove_key_from_bucket_map(schedule.setdefault("forced_releases", {}), key) or changed
+    changed = False
+    buckets = schedule.setdefault("buckets", {})
+    for due_at in list(buckets.keys()):
+        kept = [scheduled_key for scheduled_key in buckets.get(due_at, []) if scheduled_key != key]
+        if len(kept) != len(buckets.get(due_at, [])):
+            changed = True
+        if kept:
+            buckets[due_at] = kept
+        else:
+            buckets.pop(due_at, None)
     return changed
 
 
@@ -898,72 +856,7 @@ def add_schedule_key(schedule: dict[str, Any], due_at: date, key: str, replace: 
     if key in bucket:
         return changed
     bucket.append(key)
-    return True
-
-
-def add_release_buffer_key(schedule: dict[str, Any], earliest_at: date, key: str) -> bool:
-    changed = remove_schedule_key(schedule, key)
-    bucket = schedule.setdefault("release_buffer", {}).setdefault(earliest_at.isoformat(), [])
-    if key in bucket:
-        return changed
-    bucket.append(key)
-    return True
-
-
-def add_backlog_keys(schedule: dict[str, Any], keys: list[str]) -> int:
-    normalized = normalize_schedule_keys(keys)
-    if not normalized:
-        return 0
-    backlog = normalize_schedule_keys(schedule.setdefault("backlog", []))
-    for key in normalized:
-        remove_schedule_key(schedule, key)
-    existing = [key for key in backlog if key not in normalized]
-    schedule["backlog"] = [*normalized, *existing]
-    return len(normalized)
-
-
-def remove_backlog_key(schedule: dict[str, Any], key: str) -> bool:
-    backlog = schedule.setdefault("backlog", [])
-    kept = [backlog_key for backlog_key in backlog if backlog_key != key]
-    if len(kept) == len(backlog):
-        return False
-    schedule["backlog"] = kept
-    return True
-
-
-def activate_release_buffer(
-    schedule: dict[str, Any],
-    today: date,
-    daily_limit: int,
-    max_wait_days: int,
-) -> bool:
-    eligible: list[tuple[date, str]] = []
-    for earliest_at, key in iter_buffered_entries(schedule):
-        earliest_date = date_from_iso(earliest_at)
-        if earliest_date and earliest_date <= today:
-            eligible.append((earliest_date, key))
-    if not eligible:
-        return False
-
-    eligible.sort(key=lambda item: (item[0], item[1]))
-    forced = [item for item in eligible if (today - item[0]).days >= max_wait_days]
-    forced_keys = {key for _, key in forced}
-    normal = [item for item in eligible if item[1] not in forced_keys]
-    fixed_count = len(schedule_entries_for_date(schedule, today))
-    normal_capacity = max(daily_limit - fixed_count - len(forced), 0)
-    admitted = [*forced, *normal[:normal_capacity]]
-    if not admitted:
-        return False
-
-    today_bucket = schedule.setdefault("buckets", {}).setdefault(today.isoformat(), [])
-    forced_bucket = schedule.setdefault("forced_releases", {}).setdefault(today.isoformat(), [])
-    release_buffer = schedule.setdefault("release_buffer", {})
-    for _, key in admitted:
-        remove_key_from_bucket_map(release_buffer, key)
-        if key not in today_bucket:
-            today_bucket.append(key)
-        if key in forced_keys and key not in forced_bucket:
-            forced_bucket.append(key)
+    bucket[:] = sort_schedule_keys(bucket)
     return True
 
 
@@ -974,6 +867,8 @@ def add_daily_plan_keys(schedule: dict[str, Any], target_date: date, keys: list[
         if key and key not in plan:
             plan.append(key)
             changed = True
+    if changed:
+        plan[:] = sort_schedule_keys(plan)
     return changed
 
 
@@ -1010,8 +905,11 @@ def ensure_review_schedule(
 ) -> dict[str, Any]:
     schedule = load_review_schedule()
     changed = discard_overdue_buckets(schedule, today)
-    known_keys = scheduled_keys(schedule)
-    backlog_keys = set(schedule.get("backlog", []))
+    scheduled_due = {
+        key: due_at
+        for due_at, key in iter_scheduled_entries(schedule)
+    }
+    known_keys = set(scheduled_due)
     for book_id, book_record in book_records.items():
         history_records = records_by_question(book_record)
         full_records = full_records_by_question(book_record)
@@ -1020,13 +918,13 @@ def ensure_review_schedule(
             if not record.get("error_level"):
                 continue
             key = schedule_key(book_id, question_id)
-            if key in backlog_keys:
-                continue
             state_item = state.get("items", {}).get(question_id, {})
             next_due = date_from_iso(state_item.get("next_due_at"))
             if next_due and next_due >= today:
-                if key not in known_keys:
+                due_at = next_due.isoformat()
+                if scheduled_due.get(key) != due_at:
                     changed = add_schedule_key(schedule, next_due, key, replace=True) or changed
+                    scheduled_due[key] = due_at
                     known_keys.add(key)
             elif key not in known_keys:
                 if next_due:
@@ -1036,15 +934,9 @@ def ensure_review_schedule(
                 if due_at < today:
                     continue
                 changed = add_schedule_key(schedule, due_at, key, replace=False) or changed
+                scheduled_due[key] = due_at.isoformat()
                 known_keys.add(key)
 
-    settings = state.get("settings", {})
-    changed = activate_release_buffer(
-        schedule,
-        today,
-        int(settings.get("daily_limit", DEFAULT_REVIEW_SETTINGS["daily_limit"])),
-        int(settings.get("release_buffer_max_wait", DEFAULT_REVIEW_SETTINGS["release_buffer_max_wait"])),
-    ) or changed
     today_keys = schedule_entries_for_date(schedule, today)
     reviewed_today_keys = reviewed_keys_on_date(book_records, state, today)
     changed = add_daily_plan_keys(schedule, today, [*today_keys, *reviewed_today_keys]) or changed
@@ -1060,11 +952,6 @@ def schedule_entries_for_date(schedule: dict[str, Any], target_date: date) -> li
 
 def schedule_plan_for_date(schedule: dict[str, Any], target_date: date) -> list[str]:
     return schedule.get("daily_plans", {}).get(target_date.isoformat(), [])
-
-
-def is_terminal_review(level: str, interval_index: int, intervals: dict[str, list[int]]) -> bool:
-    level_intervals = intervals.get(level) or []
-    return bool(level_intervals) and interval_index >= len(level_intervals) - 1
 
 
 def review_item_from_record(
@@ -1092,9 +979,6 @@ def review_item_from_record(
     overdue_days = max((today - next_due).days, 0)
     recorded_date = record_timestamp_date(record)
     sort_order = record_sort_order(book_id, question_id, record)
-    lifecycle_status = state_item.get("status", "active")
-    intervals = state.get("settings", {}).get("intervals", DEFAULT_REVIEW_SETTINGS["intervals"])
-    interval_index = int(state_item.get("interval_index", -1))
 
     return {
         "book_id": book_id,
@@ -1119,7 +1003,7 @@ def review_item_from_record(
         "summary": record.get("student_answer_summary", ""),
         "next_due_at": next_due.isoformat(),
         "last_reviewed_at": last_reviewed,
-        "interval_index": interval_index,
+        "interval_index": state_item.get("interval_index", -1),
         "review_count": len(history),
         "review_fail_count": review_fail_count,
         "fail_count": fail_count,
@@ -1127,23 +1011,29 @@ def review_item_from_record(
         "overdue_days": overdue_days,
         "is_due": next_due <= today,
         "is_new": not history,
-        "is_final_review": lifecycle_status == "active" and is_terminal_review(level, interval_index, intervals),
-        "is_maintenance": lifecycle_status == "graduated",
-        "lifecycle_status": lifecycle_status,
         "question_number": parse_question_number(question_id),
         "sort_order": sort_order,
-        "recorded_at": recorded_date.isoformat() if recorded_date else None,
         "recorded_ordinal": recorded_date.toordinal() if recorded_date else 0,
     }
 
 
 def review_sort_key(item: dict[str, Any]) -> tuple:
+    tier_ranks = {
+        "workbook_660": {90: 0, 110: 1, 135: 2},
+        "workbook_880": {"120以下": 0, "120+": 1},
+    }
+    tier_rank = tier_ranks.get(item.get("book_id"), {}).get(item.get("target_score_tier"), 9)
+    level_rank = {"A": 0, "B": 1, "C": 2}.get(item.get("level"), 9)
     return (
-        0 if item.get("is_new") else 1,
         -item.get("recorded_ordinal", 0),
         -item.get("sort_order", 0),
-        item.get("book_id", ""),
-        item.get("question_id", ""),
+        tier_rank,
+        -item.get("recent_fail_count", 0),
+        tier_rank,
+        -item.get("fail_count", 0),
+        -item.get("overdue_days", 0),
+        tier_rank,
+        level_rank,
     )
 
 
@@ -1172,7 +1062,7 @@ def build_review_payload(
     history_maps = {book_id: records_by_question(record) for book_id, record in book_records.items()}
     full_maps = {book_id: full_records_by_question(record) for book_id, record in book_records.items()}
 
-    def item_for_key(key: str, apply_tier_filter: bool = True) -> dict[str, Any] | None:
+    def item_for_key(key: str) -> dict[str, Any] | None:
         book_id, question_id = split_schedule_key(key)
         if book_id not in book_records or not question_id:
             return None
@@ -1181,58 +1071,35 @@ def build_review_payload(
             return None
         record = {**history_record, **full_maps[book_id].get(question_id, {})}
         item = review_item_from_record(book_id, record, state, today, scheduled_due=today)
-        if item and (not apply_tier_filter or item.get("target_score_tier") in selected_tiers):
+        if item and item.get("target_score_tier") in selected_tiers:
             item["schedule_key"] = key
             item["state_history"] = state.get("items", {}).get(question_id, {}).get("history", [])
             return item
         return None
 
     candidates = [item for key in scheduled_today if (item := item_for_key(key))]
-    forced_today = set(schedule.get("forced_releases", {}).get(today.isoformat(), []))
-    for item in candidates:
-        item["is_starved"] = item["schedule_key"] in forced_today
-        item["queue_source"] = "daily"
 
     due_items = candidates
     planned_items_by_key = {item["schedule_key"]: item for key in planned_today if (item := item_for_key(key))}
     planned_items = list(planned_items_by_key.values())
-    backlog_items = []
-    for key in schedule.get("backlog", []):
-        item = item_for_key(key)
-        if item:
-            item["queue_source"] = "backlog"
-            item["is_starved"] = False
-            backlog_items.append(item)
-
-    backlog_keys = set(schedule.get("backlog", []))
-    graduated_items = []
-    for question_id, state_item in state.get("items", {}).items():
-        if state_item.get("status") != "graduated":
-            continue
-        book_id = state_item.get("book_id")
-        if not book_id:
-            continue
-        key = schedule_key(book_id, question_id)
-        item = item_for_key(key, apply_tier_filter=False)
-        if item:
-            item["queue_source"] = "maintenance"
-            item["is_in_backlog"] = key in backlog_keys
-            graduated_items.append(item)
 
     due_items.sort(key=review_sort_key)
-    graduated_items.sort(key=review_sort_key)
+    selected = due_items[:daily_limit]
+    deferred = due_items[daily_limit:]
 
     book_counts = {}
     for group in tier_groups(index):
         book_id = group["book_id"]
         book_planned = [item for item in planned_items if item["book_id"] == book_id]
         book_due = [item for item in due_items if item["book_id"] == book_id]
+        book_selected = [item for item in selected if item["book_id"] == book_id]
+        book_deferred = [item for item in deferred if item["book_id"] == book_id]
         book_counts[book_id] = {
             "label": group["label"],
             "due_total": len(book_planned),
             "pending_total": len(book_due),
-            "selected_total": len(book_due),
-            "deferred_total": 0,
+            "selected_total": len(book_selected),
+            "deferred_total": len(book_deferred),
             "tier_counts": {
                 str(tier): sum(1 for item in book_planned if item.get("target_score_tier") == tier)
                 for tier in group["tiers"]
@@ -1242,8 +1109,6 @@ def build_review_payload(
     for item in candidates:
         item.pop("state_history", None)
     for item in planned_items:
-        item.pop("state_history", None)
-    for item in [*backlog_items, *graduated_items]:
         item.pop("state_history", None)
 
     return {
@@ -1256,27 +1121,20 @@ def build_review_payload(
             "selected_tiers": selected_tiers,
             "tier_groups": tier_groups(index),
             "first_pass_interval": int(settings.get("first_pass_interval", DEFAULT_REVIEW_SETTINGS["first_pass_interval"])),
-            "release_buffer_max_wait": int(settings.get("release_buffer_max_wait", DEFAULT_REVIEW_SETTINGS["release_buffer_max_wait"])),
-            "maintenance_interval": int(settings.get("maintenance_interval", DEFAULT_REVIEW_SETTINGS["maintenance_interval"])),
             "intervals": settings.get("intervals", DEFAULT_REVIEW_SETTINGS["intervals"]),
         },
         "summary": {
             "due_total": len(planned_items),
             "pending_total": len(due_items),
-            "selected_total": len(due_items),
-            "deferred_total": 0,
+            "selected_total": len(selected),
+            "deferred_total": len(deferred),
             "overflow_total": max(len(planned_items) - daily_limit, 0),
-            "backlog_total": len(backlog_items),
-            "buffered_total": sum(len(keys) for keys in schedule.get("release_buffer", {}).values()),
-            "graduated_total": len(graduated_items),
             "book_counts": book_counts,
         },
         "activity": build_activity(state),
         "schedule_file": str(REVIEW_SCHEDULE_FILE),
-        "queue": due_items,
-        "backlog": backlog_items,
-        "graduated": graduated_items,
-        "deferred": [],
+        "queue": selected,
+        "deferred": deferred,
     }
 
 
@@ -1391,7 +1249,6 @@ def recalculate_review_item(book_id: str, question_id: str, item: dict[str, Any]
     record = records_by_question(load_book_record(book_id)).get(question_id, {})
     current_level = item.get("error_level") or record.get("error_level") or "B"
     interval_index = -1
-    lifecycle_status = "active"
     last_reviewed = None
     next_due = None
 
@@ -1400,35 +1257,20 @@ def recalculate_review_item(book_id: str, question_id: str, item: dict[str, Any]
             current_level = event.get("error_level") or current_level
         if event.get("outcome") == "wrong" and not event.get("error_level"):
             raise HTTPException(status_code=422, detail="做错记录必须包含 A/B/C 等级")
-        if event.get("outcome") == "wrong":
-            lifecycle_status = "active"
-            interval_index = 0
-            interval_days = (intervals.get(current_level) or [1])[0]
-        elif "queue_source" in event and (
-            lifecycle_status == "graduated" or is_terminal_review(current_level, interval_index, intervals)
-        ):
-            lifecycle_status = "graduated"
-            interval_days = int(
-                state["settings"].get("maintenance_interval", DEFAULT_REVIEW_SETTINGS["maintenance_interval"])
-            )
-        else:
-            interval_index, interval_days = next_interval_for(
-                current_level,
-                interval_index,
-                intervals,
-                True,
-                first_pass_interval,
-            )
+        interval_index, interval_days = next_interval_for(
+            current_level,
+            interval_index,
+            intervals,
+            event.get("outcome") == "pass",
+            first_pass_interval,
+        )
         reviewed_date = event_review_date(event)
         next_due = reviewed_date + timedelta(days=interval_days)
         event["next_due_at"] = next_due.isoformat()
-        if "queue_source" in event:
-            event["graduated_after"] = lifecycle_status == "graduated"
         last_reviewed = reviewed_date.isoformat()
 
     item["error_level"] = current_level
     item["interval_index"] = interval_index
-    item["status"] = lifecycle_status
     item["last_reviewed_at"] = last_reviewed
     item["next_due_at"] = next_due.isoformat() if next_due else None
 
@@ -1438,7 +1280,6 @@ def sync_schedule_for_question(
     question_id: str,
     level: str | None,
     next_due: date | None,
-    buffered: bool = False,
 ) -> None:
     if not next_due:
         return
@@ -1447,12 +1288,7 @@ def sync_schedule_for_question(
     if not record:
         return
     schedule = load_review_schedule()
-    key = schedule_key(book_id, question_id)
-    remove_backlog_key(schedule, key)
-    if buffered:
-        add_release_buffer_key(schedule, next_due, key)
-    else:
-        add_schedule_key(schedule, next_due, key, replace=True)
+    add_schedule_key(schedule, next_due, schedule_key(book_id, question_id), replace=True)
     save_review_schedule(schedule)
 
 
@@ -1480,33 +1316,13 @@ def update_review_feedback(payload: ReviewFeedbackRequest) -> dict[str, Any]:
     if not current_level:
         current_level = record.get("error_level") or "B"
 
-    current_index = int(current.get("interval_index", -1))
-    current_status = current.get("status", "active")
-    graduated_after = False
-    buffered = payload.outcome == "pass"
-    if payload.outcome == "wrong":
-        next_index = 0
-        interval_days = (intervals.get(current_level) or [1])[0]
-        next_status = "active"
-    elif current_status == "graduated":
-        next_index = current_index
-        interval_days = int(settings.get("maintenance_interval", DEFAULT_REVIEW_SETTINGS["maintenance_interval"]))
-        next_status = "graduated"
-        graduated_after = True
-    elif is_terminal_review(current_level, current_index, intervals):
-        next_index = current_index
-        interval_days = int(settings.get("maintenance_interval", DEFAULT_REVIEW_SETTINGS["maintenance_interval"]))
-        next_status = "graduated"
-        graduated_after = True
-    else:
-        next_index, interval_days = next_interval_for(
-            current_level,
-            current_index,
-            intervals,
-            True,
-            first_pass_interval,
-        )
-        next_status = "active"
+    next_index, interval_days = next_interval_for(
+        current_level,
+        int(current.get("interval_index", -1)),
+        intervals,
+        payload.outcome == "pass",
+        first_pass_interval,
+    )
     next_due = today + timedelta(days=interval_days)
 
     event = {
@@ -1516,13 +1332,10 @@ def update_review_feedback(payload: ReviewFeedbackRequest) -> dict[str, Any]:
         "error_level": payload.error_level,
         "note": payload.note or "",
         "next_due_at": next_due.isoformat(),
-        "queue_source": payload.queue_source,
-        "graduated_after": graduated_after,
     }
     current["book_id"] = payload.book_id
     current["error_level"] = current_level
     current["interval_index"] = next_index
-    current["status"] = next_status
     current["last_reviewed_at"] = today.isoformat()
     current["next_due_at"] = next_due.isoformat()
     current.setdefault("history", []).append(event)
@@ -1533,7 +1346,6 @@ def update_review_feedback(payload: ReviewFeedbackRequest) -> dict[str, Any]:
         payload.question_id,
         current_level,
         next_due,
-        buffered=buffered,
     )
 
     return {
@@ -1543,47 +1355,7 @@ def update_review_feedback(payload: ReviewFeedbackRequest) -> dict[str, Any]:
         "error_level": current_level,
         "next_due_at": next_due.isoformat(),
         "interval_days": interval_days,
-        "status": next_status,
-        "buffered": buffered,
     }
-
-
-def move_review_keys_to_backlog(keys: list[str]) -> dict[str, Any]:
-    schedule = load_review_schedule()
-    today = date.today()
-    today_keys = set(schedule_entries_for_date(schedule, today))
-    valid_keys = [key for key in normalize_schedule_keys(keys) if key in today_keys]
-    if not valid_keys:
-        raise HTTPException(status_code=422, detail="没有可移入遗留队列的今日题目")
-    moved = add_backlog_keys(schedule, valid_keys)
-    save_review_schedule(schedule)
-    return {"moved": moved, "backlog_total": len(schedule.get("backlog", []))}
-
-
-def restore_graduated_question(payload: GraduateRestoreRequest) -> dict[str, Any]:
-    state = load_review_state()
-    item = state.get("items", {}).get(payload.question_id)
-    if not item or item.get("book_id") != payload.book_id or item.get("status") != "graduated":
-        raise HTTPException(status_code=404, detail="没有找到对应的毕业题目")
-    intervals = state["settings"].get("intervals", DEFAULT_REVIEW_SETTINGS["intervals"])
-    next_due = date.today() + timedelta(days=(intervals.get(payload.error_level) or [1])[0])
-    item["status"] = "active"
-    item["error_level"] = payload.error_level
-    item["interval_index"] = 0
-    item["next_due_at"] = next_due.isoformat()
-    save_review_state(state)
-    sync_schedule_for_question(payload.book_id, payload.question_id, payload.error_level, next_due, buffered=False)
-    return {
-        "book_id": payload.book_id,
-        "question_id": payload.question_id,
-        "status": "active",
-        "next_due_at": next_due.isoformat(),
-    }
-
-
-def run_review_write(operation, *args):
-    with REVIEW_WRITE_LOCK:
-        return operation(*args)
 
 
 def update_review_event(question_id: str, event_index: int, payload: ReviewEventUpdateRequest) -> dict[str, Any]:
@@ -1612,13 +1384,11 @@ def update_review_event(question_id: str, event_index: int, payload: ReviewEvent
     recalculate_review_item(payload.book_id, question_id, item, state)
     save_review_state(state)
     if item.get("next_due_at"):
-        latest_event = history[-1] if history else {}
         sync_schedule_for_question(
             payload.book_id,
             question_id,
             item.get("error_level") or payload.error_level,
             date_from_iso(item.get("next_due_at")),
-            buffered=latest_event.get("outcome") == "pass",
         )
     return {
         "book_id": payload.book_id,
@@ -1673,17 +1443,7 @@ async def api_review_settings(payload: ReviewSettingsRequest):
 
 @app.post("/api/review/feedback")
 async def api_review_feedback(payload: ReviewFeedbackRequest):
-    return JSONResponse(content=await asyncio.to_thread(run_review_write, update_review_feedback, payload))
-
-
-@app.post("/api/review/backlog")
-async def api_review_backlog(payload: BacklogMoveRequest):
-    return JSONResponse(content=await asyncio.to_thread(run_review_write, move_review_keys_to_backlog, payload.keys))
-
-
-@app.post("/api/review/graduated/restore")
-async def api_review_graduated_restore(payload: GraduateRestoreRequest):
-    return JSONResponse(content=await asyncio.to_thread(run_review_write, restore_graduated_question, payload))
+    return JSONResponse(content=update_review_feedback(payload))
 
 
 @app.get("/api/review/history")
@@ -1702,9 +1462,7 @@ async def api_review_history():
 
 @app.patch("/api/review/history/{question_id}/{event_index}")
 async def api_review_history_update(question_id: str, event_index: int, payload: ReviewEventUpdateRequest):
-    return JSONResponse(
-        content=await asyncio.to_thread(run_review_write, update_review_event, question_id, event_index, payload)
-    )
+    return JSONResponse(content=update_review_event(question_id, event_index, payload))
 
 
 @app.post("/api/git/commit")

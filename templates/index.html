@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>数学错题工作台</title>
-  <link rel="stylesheet" href="/static/css/app.css?v=20260803-review-flow">
+  <link rel="stylesheet" href="/static/css/app.css?v=20260726-records-git">
 </head>
 <body>
   <div class="shell">
@@ -123,7 +123,7 @@
             <div class="review-controls">
               <label>
                 每日上限
-                <input id="dailyLimit" type="number" min="1" max="200" value="20">
+                <input id="dailyLimit" type="number" min="1" max="200" value="10">
               </label>
               <div class="tier-filter-groups" id="reviewTierFilters" aria-label="按题册选择目标分层"></div>
               <button class="primary-action compact" id="refreshReview" type="button">刷新队列</button>
@@ -154,10 +154,12 @@
             </div>
             <div class="activity-heatmap" id="reviewActivity"></div>
             <div class="rule-strip" aria-label="排序规则">
-              <span>新错题优先</span>
-              <span>机械题从新到旧</span>
-              <span>缓冲最多 7 天</span>
-              <span>遗留最新压入优先</span>
+              <span>新近优先</span>
+              <span>失败多优先</span>
+              <span>逾期优先</span>
+              <span>90 > 110 > 135</span>
+              <span>120以下 > 120+</span>
+              <span>A > B > C</span>
             </div>
           </section>
         </div>
@@ -166,30 +168,19 @@
           <section class="panel">
             <div class="panel-head">
               <h3>今日队列</h3>
-              <div class="panel-head-actions">
-                <span id="reviewTodayMeta">等待读取</span>
-                <button class="secondary-action" id="moveAllToBacklog" type="button">剩余全部压入遗留</button>
-              </div>
+              <span id="reviewTodayMeta">等待读取</span>
             </div>
             <div id="reviewQueue" class="review-list"></div>
           </section>
 
           <section class="panel">
             <div class="panel-head">
-              <h3>遗留队列</h3>
-              <span id="reviewBacklogMeta">暂存 0 题</span>
+              <h3>顺延队列</h3>
+              <span>超过上限时显示</span>
             </div>
-            <div id="reviewBacklog" class="review-list"></div>
+            <div id="reviewDeferred" class="review-list compact-list"></div>
           </section>
         </div>
-
-        <section class="panel graduated-panel">
-          <div class="panel-head">
-            <h3>毕业题库</h3>
-            <span id="reviewGraduatedMeta">60 天低频维护 · 0 题</span>
-          </div>
-          <div id="reviewGraduated" class="graduated-list"></div>
-        </section>
 
         <section class="panel review-history-panel">
           <div class="panel-head">
@@ -220,6 +211,6 @@
     </main>
   </div>
 
-  <script src="/static/js/app.js?v=20260803-review-flow"></script>
+  <script src="/static/js/app.js?v=20260726-records-git"></script>
 </body>
 </html>
