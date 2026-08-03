@@ -53,7 +53,7 @@ function bindNavigation() {
       $(`#${target}View`).classList.add("active");
       $("#pageTitle").textContent = button.textContent;
       $("#gitCommitButton").hidden = target !== "review";
-      if (target === "review") await loadReview();
+      if (target === "review" || target === "graduate") await loadReview();
     });
   });
 }
