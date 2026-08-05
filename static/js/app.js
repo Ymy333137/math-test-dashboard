@@ -8,6 +8,9 @@ const state = {
   errorFilters: { section: "all", questionType: "all", page: "all" }
 };
 
+let pendingReviewWrites = 0;
+let reviewRefreshTimer = null;
+
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
 
@@ -50,7 +53,7 @@ function bindNavigation() {
       $(`#${target}View`).classList.add("active");
       $("#pageTitle").textContent = button.textContent;
       $("#gitCommitButton").hidden = target !== "review";
-      if (target === "review") await loadReview();
+      if (target === "review" || target === "graduate") await loadReview();
     });
   });
 }
@@ -394,6 +397,10 @@ function bindReviewControls() {
   $("#reviewTierFilters").addEventListener("change", (event) => {
     if (event.target.matches("input[name='tier']")) saveReviewSettingsAndLoad();
   });
+  $("#moveAllToBacklog").addEventListener("click", () => {
+    const keys = (state.review?.queue || []).map((item) => item.schedule_key);
+    if (keys.length) moveKeysToBacklog(keys);
+  });
 }
 
 function bindGitCommit() {
@@ -460,9 +467,11 @@ function selectedTiers() {
 }
 
 async function loadReview() {
-  const limit = Number($("#dailyLimit").value || 10);
-  const query = new URLSearchParams({ limit: String(limit) });
-  if (state.review) query.set("tiers", selectedTiers().join(","));
+  const query = new URLSearchParams();
+  if (state.review) {
+    query.set("limit", String(Number($("#dailyLimit").value || 10)));
+    query.set("tiers", selectedTiers().join(","));
+  }
   const [review, reviewHistory] = await Promise.all([
     fetchJson(`/api/review/today?${query.toString()}`),
     fetchJson("/api/review/history")
@@ -497,12 +506,20 @@ function renderReview() {
   renderReviewTierCounts(review.summary.book_counts || {}, review.settings.tier_groups || []);
   renderActivity(review.activity || []);
   $("#reviewQueue").innerHTML = review.queue.length
-    ? review.queue.map((item) => renderReviewCard(item, true)).join("")
+    ? review.queue.map((item) => renderReviewCard(item, { withActions: true, canBacklog: true, source: "daily" })).join("")
     : '<div class="empty">今日没有到期回滚题。</div>';
-  $("#reviewDeferred").innerHTML = review.deferred.length
-    ? review.deferred.map((item) => renderReviewCard(item, false)).join("")
-    : '<div class="empty">没有顺延题。</div>';
+  $("#reviewBacklogMeta").textContent = `暂存 ${review.summary.backlog_total || 0} 题`;
+  $("#reviewBacklog").innerHTML = review.backlog?.length
+    ? review.backlog.map((item) => renderReviewCard(item, { withActions: true, source: "backlog" })).join("")
+    : '<div class="empty">遗留队列是空的。</div>';
+  $("#reviewGraduatedMeta").textContent = `60 天低频维护 · ${review.summary.graduated_total || 0} 题`;
+  $("#reviewGraduated").innerHTML = review.graduated?.length
+    ? review.graduated.map(renderGraduatedCard).join("")
+    : '<div class="empty">还没有完成常规回滚的毕业题。</div>';
+  $("#moveAllToBacklog").disabled = !review.queue.length;
   bindFeedbackButtons();
+  bindBacklogButtons();
+  bindGraduateRestores();
 }
 
 function renderReviewTierFilters(groups, selectedTiers) {
@@ -543,30 +560,37 @@ function renderReviewTierCounts(bookCounts, groups) {
   }).join("");
 }
 
-function renderReviewCard(item, withActions) {
+function renderReviewCard(item, options = {}) {
+  const { withActions = false, canBacklog = false, source = "daily" } = options;
   const summary = item.summary || "暂无摘要";
   const visibleId = item.book_id === "workbook_880" ? item.display_id : item.question_id;
   const context = item.book_id === "workbook_880"
     ? `<div class="question-context review-question-context">${[item.section, item.question_type, item.display_id].filter(Boolean).map((value) => `<span>${escapeHtml(value)}</span>`).join('<i aria-hidden="true">/</i>')}</div>`
     : "";
   return `
-    <article class="review-card review-level-${item.level}">
+    <article class="review-card review-level-${item.level}" data-schedule-key="${escapeHtml(item.schedule_key)}">
       <div class="review-stamp">
         <strong>${escapeHtml(visibleId)}</strong>
         <span class="level-badge level-${item.level}">${item.level}</span>
       </div>
       <div class="review-body">
         ${context}
-        <div class="review-line">
-          <span class="book-source-tag">${escapeHtml(item.book_label)}</span>
-          <span>${escapeHtml(formatTierLabel(item.target_score_tier))}</span>
-          <span>${item.is_new ? "新错题" : `复习 ${item.review_count} 次`}</span>
-          <span>${item.overdue_days ? `逾期 ${item.overdue_days} 天` : "今日到期"}</span>
-          <span>失败 ${item.fail_count} 次</span>
+        <div class="review-card-heading">
+          <div class="review-line">
+            <span class="book-source-tag">${escapeHtml(item.book_label)}</span>
+            <span>${escapeHtml(formatTierLabel(item.target_score_tier))}</span>
+            <span>${item.is_new ? "新错题" : `复习 ${item.review_count} 次`}</span>
+            <span>${source === "backlog" ? "遗留中" : (item.overdue_days ? `逾期 ${item.overdue_days} 天` : "今日到期")}</span>
+            <span>失败 ${item.fail_count} 次</span>
+            ${item.is_starved ? '<span class="starved-tag">饿死</span>' : ""}
+            ${item.is_final_review ? '<span class="final-review-tag">最后一次常规复习</span>' : ""}
+            ${item.is_maintenance ? '<span class="maintenance-tag">毕业维护</span>' : ""}
+          </div>
+          ${canBacklog ? `<button class="move-backlog-button" type="button" data-key="${escapeHtml(item.schedule_key)}">压入遗留</button>` : ""}
         </div>
         <p>${escapeHtml(summary)}</p>
         ${withActions ? `
-          <div class="feedback-row" data-book-id="${escapeHtml(item.book_id)}" data-qid="${escapeHtml(item.question_id)}">
+          <div class="feedback-row" data-book-id="${escapeHtml(item.book_id)}" data-qid="${escapeHtml(item.question_id)}" data-source="${escapeHtml(source)}">
             <input class="review-note-input" type="text" placeholder="做题 comment，可留空">
             <button class="feedback-pass" data-outcome="pass">对了</button>
             <button class="feedback-a" data-outcome="wrong" data-level="A">仍错 A</button>
@@ -574,6 +598,31 @@ function renderReviewCard(item, withActions) {
             <button class="feedback-c" data-outcome="wrong" data-level="C">仍错 C</button>
           </div>
         ` : ""}
+      </div>
+    </article>
+  `;
+}
+
+function renderGraduatedCard(item) {
+  const visibleId = item.book_id === "workbook_880" ? item.display_id : item.question_id;
+  const context = item.book_id === "workbook_880"
+    ? `<div class="question-context review-question-context">${[item.section, item.question_type, item.display_id].filter(Boolean).map((value) => `<span>${escapeHtml(value)}</span>`).join('<i aria-hidden="true">/</i>')}</div>`
+    : "";
+  return `
+    <article class="graduated-card" data-book-id="${escapeHtml(item.book_id)}" data-qid="${escapeHtml(item.question_id)}">
+      <div class="graduated-card-main">
+        <strong>${escapeHtml(visibleId)}</strong>
+        <span class="book-source-tag">${escapeHtml(item.book_label)}</span>
+        <span>${escapeHtml(formatTierLabel(item.target_score_tier))}</span>
+        <span>下次维护 ${escapeHtml(item.next_due_at || "待安排")}</span>
+        ${item.is_in_backlog ? '<span class="maintenance-backlog-tag">维护暂存遗留</span>' : ""}
+        ${context}
+      </div>
+      <div class="graduate-restore-actions" aria-label="恢复普通回滚">
+        <span>恢复回滚</span>
+        <button type="button" data-level="A">A</button>
+        <button type="button" data-level="B">B</button>
+        <button type="button" data-level="C">C</button>
       </div>
     </article>
   `;
@@ -690,17 +739,15 @@ function bindFeedbackButtons() {
         question_id: row.dataset.qid,
         outcome: button.dataset.outcome,
         error_level: button.dataset.level || null,
-        note: row.querySelector(".review-note-input")?.value.trim() || ""
+        note: row.querySelector(".review-note-input")?.value.trim() || "",
+        queue_source: row.dataset.source || "daily"
       };
       const card = row.closest(".review-card");
-      const originalText = button.textContent;
       row.dataset.submitting = "true";
-      row.setAttribute("aria-busy", "true");
-      card?.classList.add("is-submitting");
-      button.classList.add("is-selected");
-      button.textContent = "记录中";
-      row.querySelectorAll("button").forEach((item) => { item.disabled = true; });
-      setStatus(`正在记录 ${payload.question_id}`);
+      const scheduleKey = card?.dataset.scheduleKey;
+      beginReviewWrite();
+      removeReviewCardImmediately(card, payload.queue_source, scheduleKey);
+      setStatus(`已暂记 ${payload.question_id}`);
 
       try {
         await fetchJson("/api/review/feedback", {
@@ -708,16 +755,108 @@ function bindFeedbackButtons() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload)
         });
-        await loadReview();
         setStatus(`已记录 ${payload.question_id}`);
       } catch (error) {
-        row.dataset.submitting = "false";
-        row.removeAttribute("aria-busy");
-        card?.classList.remove("is-submitting");
-        button.classList.remove("is-selected");
-        button.textContent = originalText;
-        row.querySelectorAll("button").forEach((item) => { item.disabled = false; });
         setStatus(`记录失败：${error.message}`);
+        await loadReview();
+      } finally {
+        finishReviewWrite();
+      }
+    });
+  });
+}
+
+function beginReviewWrite() {
+  pendingReviewWrites += 1;
+  if (reviewRefreshTimer) clearTimeout(reviewRefreshTimer);
+}
+
+function finishReviewWrite() {
+  pendingReviewWrites = Math.max(0, pendingReviewWrites - 1);
+  if (pendingReviewWrites > 0) return;
+  reviewRefreshTimer = setTimeout(() => {
+    loadReview().catch((error) => setStatus(`校准失败：${error.message}`));
+  }, 650);
+}
+
+function removeReviewCardImmediately(card, source, scheduleKey) {
+  if (!card || !state.review) return;
+  card.classList.add("is-leaving");
+  const collection = source === "backlog" ? "backlog" : "queue";
+  state.review[collection] = (state.review[collection] || []).filter((item) => item.schedule_key !== scheduleKey);
+  if (source === "backlog") {
+    state.review.summary.backlog_total = Math.max(0, Number(state.review.summary.backlog_total || 0) - 1);
+    $("#reviewBacklogMeta").textContent = `暂存 ${state.review.summary.backlog_total} 题`;
+  } else {
+    state.review.summary.pending_total = Math.max(0, Number(state.review.summary.pending_total || 0) - 1);
+    $("#reviewSelected").textContent = state.review.summary.pending_total;
+  }
+  const total = Number(state.reviewHistory?.total_reviews || 0) + 1;
+  if (state.reviewHistory) state.reviewHistory.total_reviews = total;
+  $("#reviewHistoryTotal").textContent = `累计复盘 ${total} 题`;
+  requestAnimationFrame(() => card.remove());
+}
+
+function bindBacklogButtons() {
+  $$(".move-backlog-button").forEach((button) => {
+    button.addEventListener("click", () => moveKeysToBacklog([button.dataset.key]));
+  });
+}
+
+async function moveKeysToBacklog(keys) {
+  if (!state.review || !keys.length) return;
+  const keySet = new Set(keys);
+  const movedItems = state.review.queue.filter((item) => keySet.has(item.schedule_key));
+  if (!movedItems.length) return;
+  beginReviewWrite();
+  state.review.queue = state.review.queue.filter((item) => !keySet.has(item.schedule_key));
+  state.review.backlog = [
+    ...movedItems.map((item) => ({ ...item, queue_source: "backlog", is_starved: false })),
+    ...(state.review.backlog || []).filter((item) => !keySet.has(item.schedule_key))
+  ];
+  state.review.summary.pending_total = Math.max(0, state.review.summary.pending_total - movedItems.length);
+  state.review.summary.backlog_total = state.review.backlog.length;
+  renderReview();
+  setStatus(`已暂时压入 ${movedItems.length} 题`);
+  try {
+    await fetchJson("/api/review/backlog", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ keys })
+    });
+    setStatus(`已压入遗留 ${movedItems.length} 题`);
+  } catch (error) {
+    setStatus(`移入遗留失败：${error.message}`);
+    await loadReview();
+  } finally {
+    finishReviewWrite();
+  }
+}
+
+function bindGraduateRestores() {
+  $$(".graduate-restore-actions button").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const card = button.closest(".graduated-card");
+      beginReviewWrite();
+      card.classList.add("is-leaving");
+      requestAnimationFrame(() => card.remove());
+      setStatus(`正在恢复 ${card.dataset.qid}`);
+      try {
+        await fetchJson("/api/review/graduated/restore", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            book_id: card.dataset.bookId,
+            question_id: card.dataset.qid,
+            error_level: button.dataset.level
+          })
+        });
+        setStatus(`已恢复 ${card.dataset.qid} 的普通回滚`);
+      } catch (error) {
+        setStatus(`恢复失败：${error.message}`);
+        await loadReview();
+      } finally {
+        finishReviewWrite();
       }
     });
   });
