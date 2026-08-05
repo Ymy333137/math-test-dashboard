@@ -10,7 +10,10 @@
 ## 功能
 
 - 错题 Dashboard：按题册查看总记录、ABC 分布、掌握度趋势和目标分层。
-- 回滚复习：按 A/B/C 等级和目标分层生成每日复习队列。
+- 回滚复习：完整显示当日到期题，新错题优先，机械到期题按原始记录时间从新到旧排列。
+- 遗留队列：可将单题或当日剩余题目压入持久遗留栈，最近加入的题优先处理。
+- 动态缓冲：做对后的未来复盘按每日容量释放，最多等待 7 天；强制释放时显示“饿死”标签。
+- 毕业维护：完成最后一次常规复习后进入毕业题库，每 60 天进行一次低频维护。
 - 复盘记录：支持给每次复盘写 comment，并在点错时修改历史记录。
 - 活跃图：以 Git 风格热力图展示近期复盘活跃度。
 
@@ -66,6 +69,7 @@ http://127.0.0.1:8000
 - `800-record.json`
 - `workbook_660_error_abc.md`
 - `review_state.json`
+- `review_schedule.json`
 
 这些文件不属于本 app 仓库。
 
@@ -179,6 +183,9 @@ ABC 错题索引，用于错题页按单元和等级展示。app 会读取二级
     "daily_limit": 10,
     "selected_tiers": [90, 110, 135],
     "active_workbook": "workbook_660",
+    "first_pass_interval": 5,
+    "release_buffer_max_wait": 7,
+    "maintenance_interval": 60,
     "intervals": {
       "A": [1, 3, 10, 21],
       "B": [1, 2, 5, 12, 24],
@@ -197,6 +204,7 @@ ABC 错题索引，用于错题页按单元和等级展示。app 会读取二级
         }
       ],
       "interval_index": 0,
+      "status": "active",
       "error_level": "B",
       "last_reviewed_at": "2026-05-08",
       "next_due_at": "2026-05-09"
@@ -204,5 +212,43 @@ ABC 错题索引，用于错题页按单元和等级展示。app 会读取二级
   }
 }
 ```
+
+`status` 为 `active` 时按 A/B/C 机械间隔回滚；完成最后一次常规复习后变为 `graduated`，并进入 60 天低频维护。维护时做错会恢复为 `active`。
+
+### `review_schedule.json`
+
+复盘计划只保存 `book_id:question_id` 复合键，不重复保存题目内容：
+
+```json
+{
+  "version": "1.1",
+  "timezone": "Asia/Shanghai",
+  "buckets": {
+    "2026-08-04": [
+      "workbook_660:660-30"
+    ]
+  },
+  "release_buffer": {
+    "2026-08-10": [
+      "workbook_880:880-basic-choice-P7-(9)"
+    ]
+  },
+  "backlog": [
+    "workbook_880:880-basic-solution-P20-(1)-(III)"
+  ],
+  "forced_releases": {
+    "2026-08-17": [
+      "workbook_660:660-125"
+    ]
+  },
+  "daily_plans": {}
+}
+```
+
+- `buckets`：固定日期进入日常队列的新错题、做错后次日题和当天已释放题。
+- `release_buffer`：已达到机械间隔最早日期、等待每日容量释放的题。
+- `backlog`：人工遗留栈，数组开头是最近加入的题；进入后暂停机械回滚。
+- `forced_releases`：缓冲超过 7 天后被强制释放的题，页面显示“饿死”。
+- `daily_plans`：每日应复盘快照，完成或移入遗留后仍保留当天原始总数。
 
 也可以用浏览器访问 `/api/dashboard`、`/api/review/today` 验证数据读取是否正常。
