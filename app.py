@@ -1039,12 +1039,13 @@ def ensure_review_schedule(
                 known_keys.add(key)
 
     settings = state.get("settings", {})
-    changed = activate_release_buffer(
-        schedule,
-        today,
-        int(settings.get("daily_limit", DEFAULT_REVIEW_SETTINGS["daily_limit"])),
-        int(settings.get("release_buffer_max_wait", DEFAULT_REVIEW_SETTINGS["release_buffer_max_wait"])),
-    ) or changed
+    if today.isoformat() not in schedule.setdefault("daily_plans", {}):
+        changed = activate_release_buffer(
+            schedule,
+            today,
+            int(settings.get("daily_limit", DEFAULT_REVIEW_SETTINGS["daily_limit"])),
+            int(settings.get("release_buffer_max_wait", DEFAULT_REVIEW_SETTINGS["release_buffer_max_wait"])),
+        ) or changed
     today_keys = schedule_entries_for_date(schedule, today)
     reviewed_today_keys = reviewed_keys_on_date(book_records, state, today)
     changed = add_daily_plan_keys(schedule, today, [*today_keys, *reviewed_today_keys]) or changed
