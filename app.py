@@ -1090,6 +1090,7 @@ def review_item_from_record(
     review_fail_count = sum(1 for event in history if event.get("outcome") != "pass")
     fail_count = 1 + review_fail_count
     recent_fail_count = sum(1 for event in history[-5:] if event.get("outcome") != "pass")
+    is_recent_failure = bool(history and history[-1].get("outcome") != "pass")
     overdue_days = max((today - next_due).days, 0)
     recorded_date = record_timestamp_date(record)
     sort_order = record_sort_order(book_id, question_id, record)
@@ -1125,6 +1126,7 @@ def review_item_from_record(
         "review_fail_count": review_fail_count,
         "fail_count": fail_count,
         "recent_fail_count": recent_fail_count,
+        "is_recent_failure": is_recent_failure,
         "overdue_days": overdue_days,
         "is_due": next_due <= today,
         "is_new": not history,
@@ -1139,8 +1141,18 @@ def review_item_from_record(
 
 
 def review_sort_key(item: dict[str, Any]) -> tuple:
+    if item.get("is_new"):
+        priority_group = 0
+    elif item.get("is_recent_failure"):
+        priority_group = 1
+    elif item.get("is_maintenance"):
+        priority_group = 3
+    else:
+        priority_group = 2
+    level_priority = {"A": 0, "B": 1, "C": 2}
     return (
-        0 if item.get("is_new") else 1,
+        priority_group,
+        level_priority.get(item.get("level"), 3),
         -item.get("recorded_ordinal", 0),
         -item.get("sort_order", 0),
         item.get("book_id", ""),
