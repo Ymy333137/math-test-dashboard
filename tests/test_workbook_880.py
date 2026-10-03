@@ -206,7 +206,7 @@ class Workbook880IntegrationTests(unittest.TestCase):
         refreshed = app.ensure_review_schedule(app.load_reviewable_book_records(), state, date.today())
         self.assertNotIn(key, app.scheduled_keys(refreshed))
 
-    def test_overdue_bucket_is_deleted_instead_of_rolled_forward(self):
+    def test_loading_today_preserves_overdue_bucket_for_manual_move(self):
         today = date.today()
         old_key = "workbook_660:660-overdue"
         today_key = "workbook_660:660-today"
@@ -217,12 +217,12 @@ class Workbook880IntegrationTests(unittest.TestCase):
             }
         }
 
-        changed = app.discard_overdue_buckets(schedule, today)
+        with patch("app.load_review_schedule", return_value=schedule):
+            refreshed = app.ensure_review_schedule({}, {"settings": {}}, today)
 
-        self.assertTrue(changed)
-        self.assertNotIn((today - timedelta(days=1)).isoformat(), schedule["buckets"])
-        self.assertEqual(schedule["buckets"][today.isoformat()], [today_key])
-        self.assertNotIn(old_key, schedule["buckets"][today.isoformat()])
+        self.assertEqual(refreshed["buckets"][(today - timedelta(days=1)).isoformat()], [old_key])
+        self.assertEqual(refreshed["buckets"][today.isoformat()], [today_key])
+        self.assertNotIn(old_key, refreshed["buckets"][today.isoformat()])
 
     def test_git_summary_exposes_manual_push_command(self):
         output = """
@@ -362,19 +362,56 @@ Summary:
         self.assertFalse(result["buffered"])
         self.assertEqual(state["items"][record["question_id"]]["error_level"], "B")
 
-    def test_review_sort_is_new_first_then_recorded_time_descending(self):
+    def test_daily_review_sort_groups_books_and_pages_descending(self):
         items = [
-            {"question_id": "old-new", "is_new": True, "recorded_ordinal": 10, "sort_order": 1},
-            {"question_id": "new-new", "is_new": True, "recorded_ordinal": 20, "sort_order": 2},
-            {"question_id": "new-mechanical", "is_new": False, "recorded_ordinal": 30, "sort_order": 3},
-            {"question_id": "old-mechanical", "is_new": False, "recorded_ordinal": 5, "sort_order": 4},
+            {
+                "book_id": "workbook_660",
+                "question_id": "660-240",
+                "page": None,
+                "question_number": 240,
+                "sort_order": 240,
+            },
+            {
+                "book_id": "workbook_880",
+                "question_id": "880-page-10",
+                "page": 10,
+                "question_number": 10,
+                "sort_order": 100,
+            },
+            {
+                "book_id": "workbook_880",
+                "question_id": "880-page-20-later",
+                "page": 20,
+                "question_number": 20,
+                "sort_order": 202,
+            },
+            {
+                "book_id": "workbook_660",
+                "question_id": "660-120",
+                "page": None,
+                "question_number": 120,
+                "sort_order": 120,
+            },
+            {
+                "book_id": "workbook_880",
+                "question_id": "880-page-20-earlier",
+                "page": 20,
+                "question_number": 20,
+                "sort_order": 201,
+            },
         ]
 
-        ordered = sorted(items, key=app.review_sort_key)
+        ordered = sorted(items, key=app.daily_review_sort_key)
 
         self.assertEqual(
             [item["question_id"] for item in ordered],
-            ["new-new", "old-new", "new-mechanical", "old-mechanical"],
+            [
+                "880-page-20-later",
+                "880-page-20-earlier",
+                "880-page-10",
+                "660-240",
+                "660-120",
+            ],
         )
 
 

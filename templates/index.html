@@ -4,24 +4,26 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>数学错题工作台</title>
-  <link rel="stylesheet" href="/static/css/app.css?v=20260803-review-lifecycle">
+  <link rel="icon" href="/static/icons/notebook-pen.svg" type="image/svg+xml">
+  <script>
+    (() => {
+      const savedTheme = localStorage.getItem("math-dashboard-theme");
+      const theme = savedTheme || (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+      document.documentElement.dataset.theme = theme;
+      const savedAppearance = localStorage.getItem("math-dashboard-appearance");
+      document.documentElement.dataset.appearance = savedAppearance === "glass" ? "glass" : "matte";
+    })();
+  </script>
+  <link rel="stylesheet" href="/static/css/app.css?v=20261001-glass-reflections">
 </head>
 <body>
   <div class="shell">
     <aside class="sidebar">
-      <div class="brand">
-        <div class="brand-mark">M</div>
-        <div>
-          <h1>数学错题工作台</h1>
-          <p>本地记录 · 回滚 · 掌握度</p>
-        </div>
-      </div>
-
-      <nav class="nav">
-        <button class="nav-item active" data-target="overview">总览</button>
-        <button class="nav-item" data-target="review">回滚复习</button>
-        <button class="nav-item" data-target="errors">错题记录</button>
-        <button class="nav-item" data-target="graduate">毕业题库</button>
+      <nav class="nav" aria-label="主导航">
+        <button class="nav-item active" data-target="overview"><img class="icon" src="/static/icons/panels-top-left.svg" alt=""><span>总览</span></button>
+        <button class="nav-item" data-target="review"><img class="icon" src="/static/icons/rotate-ccw.svg" alt=""><span>回滚复习</span></button>
+        <button class="nav-item" data-target="errors"><img class="icon" src="/static/icons/notebook-pen.svg" alt=""><span>错题记录</span></button>
+        <button class="nav-item" data-target="graduate"><img class="icon" src="/static/icons/graduation-cap.svg" alt=""><span>毕业题库</span></button>
       </nav>
 
       <div class="book-panel">
@@ -33,14 +35,29 @@
 
     <main class="main">
       <header class="topbar">
-        <div>
-          <p class="eyebrow">Local Dashboard</p>
+        <div class="page-heading">
           <h2 id="pageTitle">总览</h2>
+          <span id="pageDate"></span>
         </div>
         <div class="topbar-actions">
+          <label class="appearance-picker" id="appearancePicker">
+            <span>主题</span>
+            <select id="appearanceSelect" aria-label="界面主题">
+              <option value="matte">暖米色</option>
+              <option value="glass">液态玻璃</option>
+            </select>
+          </label>
+          <button class="theme-toggle" id="themeToggle" type="button" aria-pressed="false" title="切换深色模式">
+            <img class="icon" id="themeToggleIcon" src="/static/icons/moon.svg" alt="">
+            <span class="sr-only" id="themeToggleLabel">深色</span>
+          </button>
+          <button class="git-commit-action" id="gitPullButton" type="button">
+            <img class="icon" src="/static/icons/refresh-cw.svg" alt="">
+            <span id="gitPullButtonLabel">拉取记录</span>
+          </button>
           <button class="git-commit-action" id="gitCommitButton" type="button" hidden>
-            <span class="git-commit-icon" aria-hidden="true">↑</span>
-            <span id="gitCommitButtonLabel">提交 records</span>
+            <img class="icon" src="/static/icons/save.svg" alt="">
+            <span id="gitCommitButtonLabel">提交记录</span>
           </button>
           <div class="status-pill" id="dataStatus">加载中</div>
         </div>
@@ -114,22 +131,8 @@
       <section class="view" id="reviewView">
         <div class="git-commit-notice" id="gitCommitNotice" role="status" aria-live="polite" hidden></div>
 
-        <div class="review-grid">
-          <section class="panel control-panel">
-            <div class="panel-head">
-              <h3>今日回滚</h3>
-              <span>机械间隔 · 660 + 880</span>
-            </div>
-
-            <div class="review-controls">
-              <label>
-                每日上限
-                <input id="dailyLimit" type="number" min="1" max="200" value="20">
-              </label>
-              <div class="tier-filter-groups" id="reviewTierFilters" aria-label="按题册选择目标分层"></div>
-              <button class="primary-action compact" id="refreshReview" type="button">刷新队列</button>
-            </div>
-
+        <div class="review-overview">
+          <section class="review-summary" aria-label="今日复盘统计">
             <div class="review-metrics">
               <article class="mini-metric">
                 <span>应复盘</span>
@@ -143,45 +146,55 @@
                 <span>超出上限</span>
                 <strong id="reviewOverflow">-</strong>
               </article>
+              <label class="mini-metric limit-metric" for="dailyLimit">
+                <span>每日上限</span>
+                <input id="dailyLimit" type="number" min="1" max="200" value="20">
+              </label>
             </div>
-
-            <div class="tier-ledger" id="reviewTierCounts"></div>
+            <details class="tier-breakdown">
+              <summary>按题册与分层</summary>
+              <div class="tier-ledger" id="reviewTierCounts"></div>
+            </details>
           </section>
 
-          <section class="panel activity-panel">
+          <section class="activity-panel" aria-label="复盘活跃">
             <div class="panel-head">
               <h3>复盘活跃</h3>
               <span id="activityMeta">近 16 周</span>
             </div>
             <div class="activity-heatmap" id="reviewActivity"></div>
-            <div class="rule-strip" aria-label="排序规则">
-              <span>新错题优先</span>
-              <span>机械题从新到旧</span>
-              <span>缓冲最多 7 天</span>
-              <span>遗留最新压入优先</span>
+            <div class="heat-legend" aria-label="完成比例：少到全部完成">
+              <span>少</span><i class="heat-cell"></i><i class="heat-cell heat-1"></i><i class="heat-cell heat-2"></i><i class="heat-cell heat-3"></i><i class="heat-cell heat-4"></i><span>全部完成</span>
             </div>
           </section>
         </div>
 
-        <div class="review-columns">
-          <section class="panel">
-            <div class="panel-head">
-              <h3>今日队列</h3>
-              <div class="panel-head-actions">
-                <span id="reviewTodayMeta">等待读取</span>
-                <button class="secondary-action" id="moveAllToBacklog" type="button">剩余全部压入遗留</button>
-              </div>
-            </div>
-            <div id="reviewQueue" class="review-list"></div>
-          </section>
+        <div class="review-controls">
+          <div class="tier-filter-groups" id="reviewTierFilters" aria-label="按题册选择目标分层"></div>
+          <button class="icon-button" id="refreshReview" type="button" title="刷新队列" aria-label="刷新队列"><img class="icon" src="/static/icons/refresh-cw.svg" alt=""></button>
+        </div>
 
-          <section class="panel">
-            <div class="panel-head">
-              <h3>遗留队列</h3>
-              <span id="reviewBacklogMeta">暂存 0 题</span>
+        <div class="review-columns">
+          <details class="queue-section" id="dailyQueuePanel" open>
+            <summary class="queue-heading"><h3>今日队列</h3><span id="dailyQueueCount">0</span></summary>
+            <div class="queue-panel">
+              <div class="queue-toolbar">
+                <span class="queue-meta" id="reviewTodayMeta">等待读取</span>
+                <button class="secondary-action" id="moveAllToBacklog" type="button"><img class="icon" src="/static/icons/arrow-right.svg" alt="">剩余移入遗留</button>
+              </div>
+              <div id="reviewQueue" class="review-list"></div>
             </div>
-            <div id="reviewBacklog" class="review-list"></div>
-          </section>
+          </details>
+          <details class="queue-section" id="backlogQueuePanel" open>
+            <summary class="queue-heading"><h3>遗留队列</h3><span id="backlogQueueCount">0</span></summary>
+            <div class="queue-panel">
+              <div class="queue-toolbar">
+                <span class="queue-meta" id="reviewBacklogMeta">暂存 0 题</span>
+                <button class="secondary-action" id="moveYesterdayToBacklog" type="button" title="检查昨日排期，将未完成题移入遗留队列"><img class="icon" src="/static/icons/arrow-right.svg" alt="">昨日剩余移入遗留</button>
+              </div>
+              <div id="reviewBacklog" class="review-list"></div>
+            </div>
+          </details>
         </div>
 
         <section class="panel review-history-panel">
@@ -223,6 +236,6 @@
     </main>
   </div>
 
-  <script src="/static/js/app.js?v=20260803-review-lifecycle"></script>
+  <script src="/static/js/app.js?v=20261001-theme-options"></script>
 </body>
 </html>

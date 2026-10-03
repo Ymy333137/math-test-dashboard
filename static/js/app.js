@@ -21,6 +21,7 @@ function formatPercent(value) {
 
 function setStatus(text) {
   $("#dataStatus").textContent = text;
+  $("#dataStatus").title = text;
 }
 
 async function fetchJson(url, options) {
@@ -33,6 +34,7 @@ async function fetchJson(url, options) {
 }
 
 async function init() {
+  bindThemeToggle();
   bindNavigation();
   bindLevelTabs();
   bindErrorFilters();
@@ -43,6 +45,36 @@ async function init() {
   await loadReview();
 }
 
+function bindThemeToggle() {
+  const button = $("#themeToggle");
+  const icon = $("#themeToggleIcon");
+  const label = $("#themeToggleLabel");
+  const appearanceSelect = $("#appearanceSelect");
+
+  appearanceSelect.value = document.documentElement.dataset.appearance;
+  appearanceSelect.addEventListener("change", () => {
+    const appearance = appearanceSelect.value;
+    document.documentElement.dataset.appearance = appearance;
+    localStorage.setItem("math-dashboard-appearance", appearance);
+  });
+
+  const renderTheme = (theme) => {
+    const isDark = theme === "dark";
+    document.documentElement.dataset.theme = theme;
+    button.setAttribute("aria-pressed", String(isDark));
+    button.title = isDark ? "切换浅色模式" : "切换深色模式";
+    icon.src = `/static/icons/${isDark ? "sun" : "moon"}.svg`;
+    label.textContent = isDark ? "浅色" : "深色";
+  };
+
+  renderTheme(document.documentElement.dataset.theme || "light");
+  button.addEventListener("click", () => {
+    const nextTheme = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+    localStorage.setItem("math-dashboard-theme", nextTheme);
+    renderTheme(nextTheme);
+  });
+}
+
 function bindNavigation() {
   $$(".nav-item").forEach((button) => {
     button.addEventListener("click", async () => {
@@ -51,8 +83,10 @@ function bindNavigation() {
       const target = button.dataset.target;
       $$(".view").forEach((view) => view.classList.remove("active"));
       $(`#${target}View`).classList.add("active");
-      $("#pageTitle").textContent = button.textContent;
+      $("#pageTitle").textContent = button.textContent.trim();
+      $(".book-panel").hidden = target === "review" || target === "graduate";
       $("#gitCommitButton").hidden = target !== "review";
+      $("#appearancePicker").hidden = target !== "overview";
       if (target === "review" || target === "graduate") await loadReview();
     });
   });
@@ -401,10 +435,63 @@ function bindReviewControls() {
     const keys = (state.review?.queue || []).map((item) => item.schedule_key);
     if (keys.length) moveKeysToBacklog(keys);
   });
+  $("#moveYesterdayToBacklog").addEventListener("click", moveYesterdayToBacklog);
+}
+
+async function moveYesterdayToBacklog() {
+  if (pendingReviewWrites > 0) {
+    setStatus("请等当前复盘保存完成后再检查昨日");
+    return;
+  }
+  const button = $("#moveYesterdayToBacklog");
+  button.disabled = true;
+  button.setAttribute("aria-busy", "true");
+  try {
+    const result = await fetchJson("/api/review/backlog/yesterday", { method: "POST" });
+    await loadReview();
+    setStatus(result.moved
+      ? `${result.date}：已移入遗留 ${result.moved} 题`
+      : `${result.date}：没有可移入的未完成题`);
+  } catch (error) {
+    setStatus(`检查昨日失败：${error.message}`);
+  } finally {
+    button.disabled = false;
+    button.removeAttribute("aria-busy");
+  }
 }
 
 function bindGitCommit() {
   $("#gitCommitButton").addEventListener("click", runGitCommit);
+  $("#gitPullButton").addEventListener("click", runGitPull);
+}
+
+async function runGitPull() {
+  const button = $("#gitPullButton");
+  const label = $("#gitPullButtonLabel");
+  button.disabled = true;
+  $("#gitCommitButton").disabled = true;
+  button.setAttribute("aria-busy", "true");
+  label.textContent = "拉取中";
+  setStatus("records 拉取中");
+  try {
+    const result = await fetchJson("/api/git/pull", { method: "POST" });
+    if (result.ok) {
+      state.dashboard = result.dashboard;
+      state.activeBook = state.dashboard.active_workbook || state.activeBook;
+      renderBookSelect();
+      renderOverview();
+      await loadBookErrors(state.activeBook);
+      await loadReview();
+    }
+    setStatus(formatSyncStatus(result.sync));
+  } catch (error) {
+    setStatus(`拉取失败：${error.message}`);
+  } finally {
+    button.disabled = false;
+    $("#gitCommitButton").disabled = false;
+    button.removeAttribute("aria-busy");
+    label.textContent = "拉取记录";
+  }
 }
 
 async function runGitCommit() {
@@ -412,6 +499,7 @@ async function runGitCommit() {
   const label = $("#gitCommitButtonLabel");
   const notice = $("#gitCommitNotice");
   button.disabled = true;
+  $("#gitPullButton").disabled = true;
   button.setAttribute("aria-busy", "true");
   label.textContent = "提交中";
   notice.hidden = false;
@@ -434,8 +522,9 @@ async function runGitCommit() {
     setStatus("Git 操作失败");
   } finally {
     button.disabled = false;
+    $("#gitPullButton").disabled = false;
     button.removeAttribute("aria-busy");
-    label.textContent = "提交 records";
+    label.textContent = "提交记录";
   }
 }
 
@@ -502,6 +591,9 @@ function renderReview() {
   $("#reviewDue").textContent = review.summary.due_total;
   $("#reviewSelected").textContent = review.summary.pending_total ?? review.summary.selected_total;
   $("#reviewOverflow").textContent = review.summary.overflow_total;
+  $("#pageDate").textContent = review.today;
+  $("#dailyQueueCount").textContent = review.queue.length;
+  $("#backlogQueueCount").textContent = review.backlog?.length || 0;
   $("#reviewTodayMeta").textContent = `${review.today} · ${review.label}`;
   renderReviewTierCounts(review.summary.book_counts || {}, review.settings.tier_groups || []);
   renderActivity(review.activity || []);
@@ -562,22 +654,20 @@ function renderReviewTierCounts(bookCounts, groups) {
 
 function renderReviewCard(item, options = {}) {
   const { withActions = false, canBacklog = false, source = "daily" } = options;
-  const summary = item.summary || "暂无摘要";
   const visibleId = item.book_id === "workbook_880" ? item.display_id : item.question_id;
   const context = item.book_id === "workbook_880"
-    ? `<div class="question-context review-question-context">${[item.section, item.question_type, item.display_id].filter(Boolean).map((value) => `<span>${escapeHtml(value)}</span>`).join('<i aria-hidden="true">/</i>')}</div>`
+    ? `<div class="question-context review-question-context">${[item.section, item.question_type].filter(Boolean).map((value) => `<span>${escapeHtml(value)}</span>`).join('<i aria-hidden="true">/</i>')}</div>`
     : "";
   return `
     <article class="review-card review-level-${item.level}" data-schedule-key="${escapeHtml(item.schedule_key)}">
-      <div class="review-stamp">
-        <strong>${escapeHtml(visibleId)}</strong>
-        <span class="level-badge level-${item.level}">${item.level}</span>
-      </div>
       <div class="review-body">
+        <div class="review-stamp">
+          <strong>${escapeHtml(visibleId)}</strong>
+          <span class="book-source-tag">${escapeHtml(item.book_label)}</span>
+          <span class="level-badge level-${item.level}">${item.level}</span>
+        </div>
         ${context}
-        <div class="review-card-heading">
           <div class="review-line">
-            <span class="book-source-tag">${escapeHtml(item.book_label)}</span>
             <span>${escapeHtml(formatTierLabel(item.target_score_tier))}</span>
             <span>${item.is_new ? "新错题" : `复习 ${item.review_count} 次`}</span>
             <span>${source === "backlog" ? "遗留中" : (item.overdue_days ? `逾期 ${item.overdue_days} 天` : "今日到期")}</span>
@@ -586,19 +676,18 @@ function renderReviewCard(item, options = {}) {
             ${item.is_final_review ? '<span class="final-review-tag">最后一次常规复习</span>' : ""}
             ${item.is_maintenance ? '<span class="maintenance-tag">毕业维护</span>' : ""}
           </div>
-          ${canBacklog ? `<button class="move-backlog-button" type="button" data-key="${escapeHtml(item.schedule_key)}">压入遗留</button>` : ""}
-        </div>
-        <p>${escapeHtml(summary)}</p>
+        ${item.summary ? `<p>${escapeHtml(item.summary)}</p>` : ""}
+      </div>
         ${withActions ? `
           <div class="feedback-row" data-book-id="${escapeHtml(item.book_id)}" data-qid="${escapeHtml(item.question_id)}" data-source="${escapeHtml(source)}">
-            <input class="review-note-input" type="text" placeholder="做题 comment，可留空">
-            <button class="feedback-pass" data-outcome="pass">对了</button>
-            <button class="feedback-a" data-outcome="wrong" data-level="A">仍错 A</button>
-            <button class="feedback-b" data-outcome="wrong" data-level="B">仍错 B</button>
-            <button class="feedback-c" data-outcome="wrong" data-level="C">仍错 C</button>
+            <input class="review-note-input" type="text" placeholder="添加 comment…" aria-label="${escapeHtml(visibleId)} 的复盘备注（可选）">
+            <button class="feedback-pass" data-outcome="pass" title="做对了">对了</button>
+            <button class="feedback-a" data-outcome="wrong" data-level="A" title="仍错 A · 计算错误" aria-label="仍错 A">A</button>
+            <button class="feedback-b" data-outcome="wrong" data-level="B" title="仍错 B · 思路卡住" aria-label="仍错 B">B</button>
+            <button class="feedback-c" data-outcome="wrong" data-level="C" title="仍错 C · 无从下手" aria-label="仍错 C">C</button>
           </div>
         ` : ""}
-      </div>
+      ${canBacklog ? `<button class="move-backlog-button icon-button" type="button" data-key="${escapeHtml(item.schedule_key)}" title="移入遗留队列" aria-label="将 ${escapeHtml(visibleId)} 移入遗留队列"><img class="icon" src="/static/icons/arrow-right.svg" alt=""></button>` : ""}
     </article>
   `;
 }
@@ -634,23 +723,24 @@ function renderActivity(days) {
     container.innerHTML = '<div class="empty compact-empty">暂无复盘活跃记录</div>';
     return;
   }
-  const dailyTarget = Math.max(1, Number(state.review?.settings?.daily_limit || 10));
   const cells = days.map((day) => {
-    const ratio = Math.min(day.count / dailyTarget, 1);
-    const level = activityHeatLevel(ratio, day.count);
-    const percent = Math.round(ratio * 100);
-    return `<span class="heat-cell heat-${level}" title="${day.date} · ${day.count}/${dailyTarget} 题 · ${percent}%"></span>`;
+    const level = activityHeatLevel(day.ratio, day.completed, day.count);
+    const detail = day.ratio == null
+      ? `${day.count} 次复盘 · 无当日计划`
+      : `${day.completed}/${day.planned} 题 · ${Math.round(day.ratio * 100)}%`;
+    return `<span class="heat-cell heat-${level}" tabindex="0" aria-label="${day.date} · ${detail}" data-tooltip="${day.date} · ${detail}" title="${day.date} · ${detail}"></span>`;
   }).join("");
   const total = days.reduce((sum, day) => sum + day.count, 0);
-  $("#activityMeta").textContent = `近 ${days.length} 天 · ${total} 次 · 目标 ${dailyTarget} 题/天`;
+  $("#activityMeta").textContent = `近 ${days.length} 天 · ${total} 次`;
   container.innerHTML = cells;
 }
 
-function activityHeatLevel(ratio, count) {
-  if (count <= 0) return 0;
+function activityHeatLevel(ratio, completed, count) {
+  if (ratio == null) return count > 0 ? "unknown" : 0;
+  if (completed <= 0) return 0;
   if (ratio < 0.25) return 1;
   if (ratio < 0.5) return 2;
-  if (ratio < 0.8) return 3;
+  if (ratio < 1) return 3;
   return 4;
 }
 
@@ -659,35 +749,35 @@ function renderReviewHistory() {
   const history = state.reviewHistory?.history || [];
   const totalReviews = state.reviewHistory?.total_reviews || 0;
   $("#reviewHistoryTotal").textContent = `累计复盘 ${totalReviews} 题`;
-  if (!history.length) {
-    container.innerHTML = '<div class="empty">今天暂无复盘记录。完成一次回滚后会出现在这里。</div>';
-    return;
-  }
-  container.innerHTML = groupHistoryByDate(history).map((group) => `
-    <section class="history-day">
-      <div class="history-day-label">
-        <span>${escapeHtml(group.label)} · ${group.items.length} 题</span>
-      </div>
-      <div class="history-day-items">
-        ${group.items.map(renderHistoryCard).join("")}
-      </div>
-    </section>
+  const today = state.reviewHistory?.date;
+  const yesterday = state.reviewHistory?.start_date;
+  const openByDate = container.dataset.date === today
+    ? new Map([...container.querySelectorAll("details")].map((section) => [section.dataset.date, section.open]))
+    : new Map();
+  const groups = [today, yesterday].filter(Boolean).map((date, index) => ({
+    date, label: index === 0 ? "今天" : "昨天", items: history.filter((event) => formatDateOnly(event.reviewed_at) === date),
+    open: openByDate.get(date) ?? index === 0
+  }));
+  container.dataset.date = today || "";
+  container.innerHTML = groups.map((group) => `
+    <details class="history-day" data-date="${group.date}" ${group.open ? "open" : ""}>
+      <summary class="history-day-label"><strong>${group.label} · ${group.date}</strong><span>${group.items.length} 题</span></summary>
+      <div class="history-day-items"></div>
+    </details>
   `).join("");
-  bindHistorySaves();
-}
-
-function groupHistoryByDate(history) {
-  const groups = [];
-  history.forEach((event) => {
-    const date = formatDateOnly(event.reviewed_at);
-    const last = groups[groups.length - 1];
-    if (!last || last.label !== date) {
-      groups.push({ label: date, items: [event] });
-    } else {
-      last.items.push(event);
-    }
+  [...container.querySelectorAll("details")].forEach((section, index) => {
+    const renderDay = () => {
+      if (!section.open || section.dataset.rendered) return;
+      const group = groups[index];
+      section.querySelector(".history-day-items").innerHTML = group.items.length
+        ? group.items.map(renderHistoryCard).join("")
+        : `<div class="empty">${group.label}暂无复盘记录。</div>`;
+      section.dataset.rendered = "true";
+      bindHistorySaves(section);
+    };
+    section.addEventListener("toggle", renderDay);
+    renderDay();
   });
-  return groups;
 }
 
 function renderHistoryCard(event) {
@@ -712,18 +802,18 @@ function renderHistoryCard(event) {
         ${context}
       </div>
       <div class="history-edit">
-        <select class="history-outcome">
+        <select class="history-outcome" aria-label="复盘结果">
           <option value="pass" ${event.outcome === "pass" ? "selected" : ""}>对了</option>
           <option value="wrong" ${event.outcome === "wrong" ? "selected" : ""}>仍错</option>
         </select>
-        <select class="history-level">
+        <select class="history-level" aria-label="错误等级">
           <option value="" ${!event.error_level ? "selected" : ""}>无等级</option>
           <option value="A" ${event.error_level === "A" ? "selected" : ""}>A</option>
           <option value="B" ${event.error_level === "B" ? "selected" : ""}>B</option>
           <option value="C" ${event.error_level === "C" ? "selected" : ""}>C</option>
         </select>
-        <input class="history-note" type="text" value="${escapeHtml(event.note || "")}" placeholder="复盘 comment">
-        <button class="history-save" type="button">保存</button>
+        <input class="history-note" type="text" value="${escapeHtml(event.note || "")}" placeholder="添加 comment…" aria-label="复盘备注">
+        <button class="history-save" type="button" title="保存这条记录"><img class="icon" src="/static/icons/save.svg" alt=""><span>保存</span></button>
       </div>
     </article>
   `;
@@ -794,6 +884,8 @@ function removeReviewCardImmediately(card, source, scheduleKey) {
   const total = Number(state.reviewHistory?.total_reviews || 0) + 1;
   if (state.reviewHistory) state.reviewHistory.total_reviews = total;
   $("#reviewHistoryTotal").textContent = `累计复盘 ${total} 题`;
+  $("#dailyQueueCount").textContent = state.review.queue.length;
+  $("#backlogQueueCount").textContent = state.review.backlog.length;
   requestAnimationFrame(() => card.remove());
 }
 
@@ -862,8 +954,8 @@ function bindGraduateRestores() {
   });
 }
 
-function bindHistorySaves() {
-  $$(".history-card").forEach((card) => {
+function bindHistorySaves(root = document) {
+  root.querySelectorAll(".history-card").forEach((card) => {
     const outcomeSelect = card.querySelector(".history-outcome");
     const levelSelect = card.querySelector(".history-level");
     levelSelect.addEventListener("change", () => {
@@ -878,7 +970,7 @@ function bindHistorySaves() {
     });
   });
 
-  $$(".history-save").forEach((button) => {
+  root.querySelectorAll(".history-save").forEach((button) => {
     button.addEventListener("click", async () => {
       const card = button.closest(".history-card");
       let outcome = card.querySelector(".history-outcome").value;

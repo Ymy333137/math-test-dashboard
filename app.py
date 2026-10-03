@@ -456,8 +456,8 @@ def records_dirty_files() -> list[str]:
     return [line for line in result.stdout.splitlines() if line.strip()]
 
 
-def sync_records_repo() -> dict[str, Any]:
-    if not AUTO_SYNC_RECORDS:
+def sync_records_repo(*, manual: bool = False) -> dict[str, Any]:
+    if not AUTO_SYNC_RECORDS and not manual:
         return {"status": "disabled", "message": "自动同步已关闭"}
 
     if not RECORDS_DIR.exists():
@@ -501,8 +501,9 @@ def sync_records_repo() -> dict[str, Any]:
     return {"status": "pulled", "message": f"已自动同步 records：拉取 {behind} 个提交", "ahead": ahead, "behind": behind}
 
 
-def build_dashboard_payload() -> dict[str, Any]:
-    records_sync = sync_records_repo()
+def build_dashboard_payload(records_sync: dict[str, Any] | None = None) -> dict[str, Any]:
+    if records_sync is None:
+        records_sync = sync_records_repo()
     index = load_index()
     book_records = load_all_book_records(index)
     abc_indexes = parse_abc_indexes()
@@ -994,22 +995,13 @@ def reviewed_keys_on_date(
     return keys
 
 
-def discard_overdue_buckets(schedule: dict[str, Any], today: date) -> bool:
-    buckets = schedule.setdefault("buckets", {})
-    today_key = today.isoformat()
-    changed = False
-    for due_at in sorted([key for key in buckets if key < today_key]):
-        changed = bool(buckets.pop(due_at, [])) or changed
-    return changed
-
-
 def ensure_review_schedule(
     book_records: dict[str, dict[str, Any]],
     state: dict[str, Any],
     today: date,
 ) -> dict[str, Any]:
     schedule = load_review_schedule()
-    changed = discard_overdue_buckets(schedule, today)
+    changed = False
     known_keys = scheduled_keys(schedule)
     backlog_keys = set(schedule.get("backlog", []))
     for book_id, book_record in book_records.items():
@@ -1140,7 +1132,20 @@ def review_item_from_record(
     }
 
 
-def review_sort_key(item: dict[str, Any]) -> tuple:
+def daily_review_sort_key(item: dict[str, Any]) -> tuple:
+    book_priority = {"workbook_880": 0, "workbook_660": 1}
+    page_order = item.get("page")
+    if not isinstance(page_order, (int, float)):
+        page_order = item.get("question_number", 0)
+    return (
+        book_priority.get(item.get("book_id"), len(book_priority)),
+        -page_order,
+        -item.get("sort_order", 0),
+        item.get("question_id", ""),
+    )
+
+
+def graduated_review_sort_key(item: dict[str, Any]) -> tuple:
     if item.get("is_new"):
         priority_group = 0
     elif item.get("is_recent_failure"):
@@ -1232,8 +1237,8 @@ def build_review_payload(
             item["is_in_backlog"] = key in backlog_keys
             graduated_items.append(item)
 
-    due_items.sort(key=review_sort_key)
-    graduated_items.sort(key=review_sort_key)
+    due_items.sort(key=daily_review_sort_key)
+    graduated_items.sort(key=graduated_review_sort_key)
 
     book_counts = {}
     for group in tier_groups(index):
@@ -1284,7 +1289,7 @@ def build_review_payload(
             "graduated_total": len(graduated_items),
             "book_counts": book_counts,
         },
-        "activity": build_activity(state),
+        "activity": build_activity(state, schedule=schedule),
         "schedule_file": str(REVIEW_SCHEDULE_FILE),
         "queue": due_items,
         "backlog": backlog_items,
@@ -1323,29 +1328,47 @@ def event_review_date(event: dict[str, Any]) -> date:
         return date.today()
 
 
-def build_activity(state: dict[str, Any], days: int = 112) -> list[dict[str, Any]]:
+def build_activity(
+    state: dict[str, Any], days: int = 112, schedule: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     today = date.today()
     start = today - timedelta(days=days - 1)
+    plans = (schedule if schedule is not None else load_review_schedule()).get("daily_plans", {})
+    # Older events lack book_id; their existing plan keys supply the identity.
+    planned_keys = {question_id_from_schedule_key(key): key for keys in plans.values() for key in keys}
     counts: Counter[str] = Counter()
-    for item in state.get("items", {}).values():
+    completed: dict[str, set[str]] = {}
+    for question_id, item in state.get("items", {}).items():
         for event in item.get("history", []):
             event_date = event_review_date(event)
             if start <= event_date <= today:
-                counts.update([event_date.isoformat()])
+                day = event_date.isoformat()
+                counts.update([day])
+                book_id = event.get("book_id") or item.get("book_id")
+                key = schedule_key(book_id, question_id) if book_id else planned_keys.get(question_id)
+                if key:
+                    completed.setdefault(day, set()).add(key)
 
-    return [
-        {
-            "date": (start + timedelta(days=offset)).isoformat(),
-            "count": counts.get((start + timedelta(days=offset)).isoformat(), 0),
-        }
-        for offset in range(days)
-    ]
+    activity = []
+    for offset in range(days):
+        day = (start + timedelta(days=offset)).isoformat()
+        plan = set(plans.get(day, []))
+        done = len(plan & completed.get(day, set()))
+        activity.append({
+            "date": day,
+            "count": counts.get(day, 0),
+            "planned": len(plan),
+            "completed": done,
+            "ratio": done / len(plan) if plan else None,
+        })
+    return activity
 
 
 def flatten_review_history(
     state: dict[str, Any],
     limit: int | None = 40,
     target_date: date | None = None,
+    start_date: date | None = None,
 ) -> list[dict[str, Any]]:
     events = []
     index = load_index()
@@ -1362,7 +1385,7 @@ def flatten_review_history(
         for event_index, event in enumerate(item.get("history", [])):
             if event.get("outcome") != "pass":
                 cumulative_fail_count += 1
-            if target_date and event_review_date(event) != target_date:
+            if target_date and not (start_date or target_date) <= event_review_date(event) <= target_date:
                 continue
             events.append(
                 {
@@ -1573,6 +1596,34 @@ def move_review_keys_to_backlog(keys: list[str]) -> dict[str, Any]:
     return {"moved": moved, "backlog_total": len(schedule.get("backlog", []))}
 
 
+def move_yesterday_to_backlog() -> dict[str, Any]:
+    schedule = load_review_schedule()
+    today = date.today()
+    yesterday = today - timedelta(days=1)
+    keys = schedule_entries_for_date(schedule, yesterday)
+    result = {"date": yesterday.isoformat(), "moved": 0, "backlog_total": len(schedule["backlog"])}
+    if not keys:
+        return result
+
+    state = load_review_state()
+    reserved_keys = set(schedule["backlog"])
+    reserved_keys.update(key for due_at, key in iter_scheduled_entries(schedule) if due_at >= today.isoformat())
+    reserved_keys.update(key for _, key in iter_buffered_entries(schedule))
+    remaining = []
+    for key in keys:
+        _, question_id = split_schedule_key(key)
+        last_reviewed = date_from_iso(state.get("items", {}).get(question_id, {}).get("last_reviewed_at"))
+        if key not in reserved_keys and (not last_reviewed or last_reviewed < yesterday):
+            remaining.append(key)
+
+    schedule["buckets"].pop(yesterday.isoformat(), None)
+    schedule["forced_releases"].pop(yesterday.isoformat(), None)
+    result["moved"] = add_backlog_keys(schedule, remaining)
+    result["backlog_total"] = len(schedule["backlog"])
+    save_review_schedule(schedule)
+    return result
+
+
 def restore_graduated_question(payload: GraduateRestoreRequest) -> dict[str, Any]:
     state = load_review_state()
     item = state.get("items", {}).get(payload.question_id)
@@ -1694,6 +1745,11 @@ async def api_review_backlog(payload: BacklogMoveRequest):
     return JSONResponse(content=await asyncio.to_thread(run_review_write, move_review_keys_to_backlog, payload.keys))
 
 
+@app.post("/api/review/backlog/yesterday")
+async def api_review_backlog_yesterday():
+    return JSONResponse(content=await asyncio.to_thread(run_review_write, move_yesterday_to_backlog))
+
+
 @app.post("/api/review/graduated/restore")
 async def api_review_graduated_restore(payload: GraduateRestoreRequest):
     return JSONResponse(content=await asyncio.to_thread(run_review_write, restore_graduated_question, payload))
@@ -1706,7 +1762,10 @@ async def api_review_history():
     return JSONResponse(
         content={
             "date": today.isoformat(),
-            "history": flatten_review_history(state, limit=None, target_date=today),
+            "start_date": (today - timedelta(days=1)).isoformat(),
+            "history": flatten_review_history(
+                state, limit=None, target_date=today, start_date=today - timedelta(days=1),
+            ),
             "activity": build_activity(state),
             "total_reviews": count_review_events(state),
         }
@@ -1718,6 +1777,27 @@ async def api_review_history_update(question_id: str, event_index: int, payload:
     return JSONResponse(
         content=await asyncio.to_thread(run_review_write, update_review_event, question_id, event_index, payload)
     )
+
+
+def pull_records_payload() -> dict[str, Any]:
+    with REVIEW_WRITE_LOCK:
+        result = sync_records_repo(manual=True)
+        ok = result["status"] in {"pulled", "cloned", "up_to_date"}
+        return {
+            "ok": ok,
+            "sync": result,
+            "dashboard": build_dashboard_payload(result) if ok else None,
+        }
+
+
+@app.post("/api/git/pull")
+async def api_git_pull():
+    if not GIT_COMMIT_LOCK.acquire(blocking=False):
+        raise HTTPException(status_code=409, detail="已有 Git 操作正在进行，请稍候")
+    try:
+        return JSONResponse(content=await asyncio.to_thread(pull_records_payload))
+    finally:
+        GIT_COMMIT_LOCK.release()
 
 
 @app.post("/api/git/commit")
