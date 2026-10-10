@@ -1,0 +1,6 @@
+services:
+  dashboard:
+    environment:
+      PUBLIC_REFRESH_SOCKET: /refresh-private/refresh.sock
+    volumes:
+      - /run/math-public-refresh/private:/refresh-private:ro

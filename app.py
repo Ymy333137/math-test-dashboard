@@ -4,6 +4,7 @@ import os
 import re
 import subprocess
 import threading
+from public_view.refresh_client import refresh as refresh_public_snapshot
 from collections import Counter
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -159,7 +160,7 @@ def parse_commit_summary(output: str) -> dict[str, dict[str, str]]:
         results[repo] = {
             "status": status,
             "message": message,
-            "retry_command": f'git -C "{repo_dirs[repo]}" push' if status == "push_failed" else "",
+            "retry_command": (os.getenv("RECORDS_PUSH_COMMAND", f'git -C "{RECORDS_DIR}" push') if repo == "records" else f'git -C "{repo_dirs[repo]}" push') if status == "push_failed" else "",
         }
     return results
 
@@ -524,6 +525,7 @@ def build_dashboard_payload(records_sync: dict[str, Any] | None = None) -> dict[
     return {
         "version": index.get("version"),
         "records_dir": str(RECORDS_DIR),
+        "records_push_command": os.getenv("RECORDS_PUSH_COMMAND", f'git -C "{RECORDS_DIR}" push'),
         "records_sync": records_sync,
         "active_workbook": index.get("active_workbook"),
         "generated_at": datetime.now().isoformat(timespec="seconds"),
@@ -1175,6 +1177,7 @@ def reviewed_on(item: dict[str, Any], target_date: date) -> bool:
 def build_review_payload(
     selected_tiers: list[TierValue] | None = None,
     daily_limit: int | None = None,
+    *, read_only: bool = False,
 ) -> dict[str, Any]:
     index = load_index()
     state = load_review_state()
@@ -1183,7 +1186,7 @@ def build_review_payload(
     daily_limit = daily_limit or int(settings.get("daily_limit", 10))
     today = date.today()
     book_records = load_reviewable_book_records(index)
-    schedule = ensure_review_schedule(book_records, state, today)
+    schedule = load_review_schedule() if read_only else ensure_review_schedule(book_records, state, today)
     scheduled_today = schedule_entries_for_date(schedule, today)
     planned_today = schedule_plan_for_date(schedule, today)
 
@@ -1788,6 +1791,18 @@ def pull_records_payload() -> dict[str, Any]:
             "sync": result,
             "dashboard": build_dashboard_payload(result) if ok else None,
         }
+
+
+@app.post("/api/public-snapshot/refresh")
+def api_public_snapshot_refresh():
+    socket_path = os.getenv("PUBLIC_REFRESH_SOCKET")
+    if not socket_path:
+        raise HTTPException(status_code=503, detail="此环境未配置公开副本刷新服务")
+    try:
+        status, result = refresh_public_snapshot(socket_path)
+    except (OSError, ValueError):
+        raise HTTPException(status_code=503, detail="公开副本刷新服务暂不可用")
+    return JSONResponse(status_code=status, content=result)
 
 
 @app.post("/api/git/pull")

@@ -358,6 +358,10 @@ textarea { min-height: 86px; resize: vertical; }
 .queue-heading h3 { margin: 0; font-size: 17px; font-weight: 650; }
 .queue-heading > span { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 .queue-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; min-height: 50px; padding: 8px 0; }
+.queue-toolbar-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.sort-backlog-button[aria-pressed="true"] { background-color: var(--primary-tint); color: var(--accent); border-color: var(--accent); }
+.sort-backlog-button[aria-pressed="true"] .icon { filter: none; }
+:root[data-theme="dark"] .sort-backlog-button[aria-pressed="true"] .icon { filter: invert(1); }
 .queue-toolbar .secondary-action { min-height: 30px; padding: 4px 8px; font-size: 11px; }
 .queue-toolbar .secondary-action .icon { width: 14px; height: 14px; flex-basis: 14px; }
 .queue-meta { color: var(--muted); font-size: 11px; }

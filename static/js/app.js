@@ -5,7 +5,8 @@ const state = {
   reviewHistory: null,
   activeBook: "workbook_660",
   activeLevel: "all",
-  errorFilters: { section: "all", questionType: "all", page: "all" }
+  errorFilters: { section: "all", questionType: "all", page: "all" },
+  backlogPageDescending: false
 };
 
 let pendingReviewWrites = 0;
@@ -26,9 +27,15 @@ function setStatus(text) {
 
 async function fetchJson(url, options) {
   const response = await fetch(url, options);
-  const data = await response.json();
+  const body = await response.text();
+  let data;
+  try {
+    data = JSON.parse(body);
+  } catch {
+    throw new Error(`服务器响应为空或不是有效 JSON（HTTP ${response.status}）；操作可能已执行，请先检查仓库状态。`);
+  }
   if (!response.ok) {
-    throw new Error(data.detail || "请求失败");
+    throw new Error(data.detail || data.message || "请求失败");
   }
   return data;
 }
@@ -436,6 +443,30 @@ function bindReviewControls() {
     if (keys.length) moveKeysToBacklog(keys);
   });
   $("#moveYesterdayToBacklog").addEventListener("click", moveYesterdayToBacklog);
+  $("#sortBacklogByPage").addEventListener("click", () => {
+    state.backlogPageDescending = !state.backlogPageDescending;
+    $("#sortBacklogByPage").setAttribute("aria-pressed", String(state.backlogPageDescending));
+    const cards = new Map($$("#reviewBacklog .review-card").map((card) => [card.dataset.scheduleKey, card]));
+    $("#reviewBacklog").append(...backlogDisplayItems().map((item) => cards.get(item.schedule_key)).filter(Boolean));
+  });
+}
+
+function backlogDisplayItems() {
+  const items = state.review?.backlog || [];
+  if (!state.backlogPageDescending) return items;
+  const bookPriority = { workbook_880: 0, workbook_660: 1 };
+  const typePriority = { "解答题": 0, "填空题": 1, "选择题": 2 };
+  const pageOrder = (item) => item.page == null ? (item.question_number || 0) : Number(item.page);
+  return [...items].sort((a, b) =>
+    (bookPriority[a.book_id] ?? 2) - (bookPriority[b.book_id] ?? 2)
+    || pageOrder(b) - pageOrder(a)
+    || (a.book_id === "workbook_880" ? (
+      (typePriority[a.question_type] ?? 3) - (typePriority[b.question_type] ?? 3)
+      || (b.display_id || b.question_id).localeCompare(a.display_id || a.question_id, "zh-CN", { numeric: true })
+    ) : 0)
+    || (b.sort_order || 0) - (a.sort_order || 0)
+    || a.question_id.localeCompare(b.question_id)
+  );
 }
 
 async function moveYesterdayToBacklog() {
@@ -461,6 +492,21 @@ async function moveYesterdayToBacklog() {
 }
 
 function bindGitCommit() {
+  $("#publicRefreshButton").addEventListener("click", async () => {
+    const button = $("#publicRefreshButton");
+    button.disabled = true;
+    button.setAttribute("aria-busy", "true");
+    setStatus("正在更新公开副本…");
+    try {
+      const result = await fetchJson("/api/public-snapshot/refresh", {method: "POST"});
+      setStatus(result.message);
+    } catch (error) {
+      setStatus(`更新失败：${error.message}`);
+    } finally {
+      button.disabled = false;
+      button.removeAttribute("aria-busy");
+    }
+  });
   $("#gitCommitButton").addEventListener("click", runGitCommit);
   $("#gitPullButton").addEventListener("click", runGitPull);
 }
@@ -517,7 +563,7 @@ async function runGitCommit() {
       <strong>Git 操作未完成</strong>
       <span>${escapeHtml(error.message)}</span>
       <span>请打开终端检查 records 仓库；如果已经产生本地 commit，请手动执行：</span>
-      <code class="git-retry-command">git -C "/Users/y-mac/Documents/math-test_2/records" push</code>
+      <code class="git-retry-command">${escapeHtml(state.dashboard?.records_push_command || "请在运行应用的服务器终端检查 records 仓库后执行 git push")}</code>
     `;
     setStatus("Git 操作失败");
   } finally {
@@ -602,8 +648,9 @@ function renderReview() {
     : '<div class="empty">今日没有到期回滚题。</div>';
   $("#reviewBacklogMeta").textContent = `暂存 ${review.summary.backlog_total || 0} 题`;
   $("#reviewBacklog").innerHTML = review.backlog?.length
-    ? review.backlog.map((item) => renderReviewCard(item, { withActions: true, source: "backlog" })).join("")
+    ? backlogDisplayItems().map((item) => renderReviewCard(item, { withActions: true, source: "backlog" })).join("")
     : '<div class="empty">遗留队列是空的。</div>';
+  $("#sortBacklogByPage").disabled = (review.backlog?.length || 0) < 2;
   $("#reviewGraduatedMeta").textContent = `60 天低频维护 · ${review.summary.graduated_total || 0} 题`;
   $("#reviewGraduated").innerHTML = review.graduated?.length
     ? review.graduated.map(renderGraduatedCard).join("")

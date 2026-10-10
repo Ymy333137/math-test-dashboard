@@ -14,7 +14,7 @@
       document.documentElement.dataset.appearance = savedAppearance === "glass" ? "glass" : "matte";
     })();
   </script>
-  <link rel="stylesheet" href="/static/css/app.css?v=20261001-glass-reflections">
+  <link rel="stylesheet" href="/static/css/app.css?v=20261008-backlog-page-sort">
 </head>
 <body>
   <div class="shell">
@@ -50,6 +50,10 @@
           <button class="theme-toggle" id="themeToggle" type="button" aria-pressed="false" title="切换深色模式">
             <img class="icon" id="themeToggleIcon" src="/static/icons/moon.svg" alt="">
             <span class="sr-only" id="themeToggleLabel">深色</span>
+          </button>
+          <button class="git-commit-action" id="publicRefreshButton" type="button" title="更新公开副本">
+            <img class="icon" src="/static/icons/refresh-cw.svg" alt="">
+            <span>更新公开副本</span>
           </button>
           <button class="git-commit-action" id="gitPullButton" type="button">
             <img class="icon" src="/static/icons/refresh-cw.svg" alt="">
@@ -190,7 +194,10 @@
             <div class="queue-panel">
               <div class="queue-toolbar">
                 <span class="queue-meta" id="reviewBacklogMeta">暂存 0 题</span>
-                <button class="secondary-action" id="moveYesterdayToBacklog" type="button" title="检查昨日排期，将未完成题移入遗留队列"><img class="icon" src="/static/icons/arrow-right.svg" alt="">昨日剩余移入遗留</button>
+                <div class="queue-toolbar-actions">
+                  <button class="secondary-action sort-backlog-button" id="sortBacklogByPage" type="button" aria-pressed="false" title="按页码降序排列，再点一次恢复原顺序；880 在前，660 按题号降序"><img class="icon" src="/static/icons/arrow-down-wide-narrow.svg" alt="">页码降序</button>
+                  <button class="secondary-action" id="moveYesterdayToBacklog" type="button" title="检查昨日排期，将未完成题移入遗留队列"><img class="icon" src="/static/icons/arrow-right.svg" alt="">昨日剩余移入遗留</button>
+                </div>
               </div>
               <div id="reviewBacklog" class="review-list"></div>
             </div>
@@ -236,6 +243,6 @@
     </main>
   </div>
 
-  <script src="/static/js/app.js?v=20261001-theme-options"></script>
+  <script src="/static/js/app.js?v=20261010-public-refresh"></script>
 </body>
 </html>

@@ -1,0 +1,10 @@
+[Unit]
+Description=Export approved math review fields to public snapshot
+After=math-public-refresh.service
+Requires=math-public-refresh.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/math-public
+ExecStart=/usr/bin/curl --fail --silent --show-error --max-time 115 --unix-socket /run/math-public-refresh/private/refresh.sock -X POST http://localhost/refresh
+TimeoutStartSec=120

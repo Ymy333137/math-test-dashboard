@@ -1,0 +1,40 @@
+services:
+  public:
+    build: .
+    container_name: math-public
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8090:8080"
+    volumes:
+      - ./site:/public:ro
+      - /run/math-public-refresh/public:/refresh-public:ro
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 128m
+    cpus: 0.5
+    pids_limit: 64
+    logging:
+      driver: json-file
+      options: {max-size: "5m", max-file: "2"}
+  exporter:
+    profiles: [export]
+    image: math-dashboard-dashboard:latest
+    entrypoint: ["python", "/workspace/app/public_view/export.py"]
+    network_mode: none
+    user: "65534:65534"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 256m
+    pids_limit: 32
+    environment:
+      MATH_RECORDS_DIR: /records
+      AUTO_SYNC_RECORDS: "0"
+      TZ: Asia/Shanghai
+      PYTHONDONTWRITEBYTECODE: "1"
+    volumes:
+      - /opt/math-dashboard/records:/records:ro
+      - /opt/math-dashboard/app/app.py:/workspace/app/app.py:ro
+      - ./export.py:/workspace/app/public_view/export.py:ro
+      - ./site:/public

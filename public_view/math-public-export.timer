@@ -1,0 +1,10 @@
+[Unit]
+Description=Refresh public math review snapshot hourly
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+Unit=math-public-export.service
+
+[Install]
+WantedBy=timers.target

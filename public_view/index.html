@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>回滚复习 · 公开进度</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/view.js" defer></script>
+</head>
+<body>
+  <main>
+    <header><div class="heading"><h1>回滚复习</h1><span id="date"></span><span class="readonly">公开进度</span></div><div class="refresh-area"><span id="updated">正在加载…</span><button id="refreshButton" type="button" title="刷新公开进度" aria-label="刷新公开进度">↻</button><span id="refreshStatus" role="status" aria-live="polite"></span></div></header>
+    <section class="overview" aria-label="复盘概况">
+      <div class="metrics" id="metrics"></div>
+      <div class="activity"><div class="section-heading"><h2>复盘活跃</h2><span id="activityMeta"></span></div><div id="heatmap" aria-label="每日复盘活跃度"></div><div class="legend">少 <i class="heat-0"></i><i class="heat-1"></i><i class="heat-2"></i><i class="heat-3"></i><i class="heat-4"></i> 全部完成</div></div>
+      <details class="book-breakdown"><summary>按题册与分层</summary><div id="books"></div></details>
+    </section>
+    <div id="tiers" class="tiers"></div>
+    <section class="queues">
+      <details open class="queue-column"><summary>今日队列 <span id="queueCount"></span></summary><p class="queue-meta" id="queueMeta"></p><div id="queue"></div></details>
+      <details open class="queue-column"><summary>遗留队列 <span id="backlogCount"></span></summary><p class="queue-meta" id="backlogMeta"></p><div id="backlog"></div></details>
+    </section>
+    <section class="history"><div class="section-heading"><h2>复盘记录</h2><span id="total"></span></div><div id="history"></div></section>
+  </main>
+</body>
+</html>

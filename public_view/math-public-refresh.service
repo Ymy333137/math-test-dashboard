@@ -1,0 +1,18 @@
+[Unit]
+Description=Restricted public snapshot refresh broker
+After=docker.service
+Requires=docker.service
+
+[Service]
+ExecStart=/usr/bin/python3 /opt/math-public/refresh_service.py
+Restart=on-failure
+RuntimeDirectory=math-public-refresh
+RuntimeDirectoryPreserve=yes
+StateDirectory=math-public-refresh
+UMask=0077
+TasksMax=64
+MemoryMax=128M
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
